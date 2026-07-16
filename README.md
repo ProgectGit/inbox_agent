@@ -68,6 +68,12 @@ supported document to save it. Gemini transcribes audio, extracts visible text
 from images, and reads documents before the normal classification and RAG
 pipeline. Archive formats remain intentionally blocked for the MVP.
 
+Plain-text files (`.txt`, `.md`, `.csv`, `.json`, `.xml`) and Word `.docx`
+documents are extracted locally inside n8n; `.docx` parsing uses the bundled
+`mammoth` package. This avoids sending unsupported Word MIME types to Gemini.
+The n8n container therefore enables `mammoth` for Code nodes through
+`NODE_FUNCTION_ALLOW_EXTERNAL` and sets `NODE_PATH` to n8n's installed modules.
+
 Use `/save ...` or `/inbox ...` to force capture when a note begins with wording
 that resembles a search command.
 

@@ -43,6 +43,8 @@ services:
       WEBHOOK_URL: https://inbox.mihabot.top/
       GENERIC_TIMEZONE: Europe/Kiev
       TZ: Europe/Kiev
+      NODE_FUNCTION_ALLOW_EXTERNAL: mammoth
+      NODE_PATH: /usr/local/lib/node_modules/n8n/node_modules
     ports:
       - "127.0.0.1:5679:5678"
     volumes:

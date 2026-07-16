@@ -36,6 +36,16 @@
     },
     {
       "parameters": {
+        "jsCode": "if (!$json.attachment_id || !$json.telegram_file_id) return [];\nreturn [{ json: $json }];"
+      },
+      "id": "ce9a91bd-6c3a-4189-95bf-78b1ddfbc8fa",
+      "name": "Pass Claimed Attachment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-230, 0]
+    },
+    {
+      "parameters": {
         "resource": "file",
         "operation": "get",
         "fileId": "={{ $json.telegram_file_id }}",
@@ -86,7 +96,8 @@
   "connections": {
     "When Executed by Another Workflow": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
     "Every Minute": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
-    "Claim Pending Attachment": {"main": [[{"node": "Download Original from Telegram", "type": "main", "index": 0}]]},
+    "Claim Pending Attachment": {"main": [[{"node": "Pass Claimed Attachment", "type": "main", "index": 0}]]},
+    "Pass Claimed Attachment": {"main": [[{"node": "Download Original from Telegram", "type": "main", "index": 0}]]},
     "Download Original from Telegram": {"main": [[{"node": "Upload Original to B2", "type": "main", "index": 0}]]},
     "Upload Original to B2": {"main": [[{"node": "Mark Original Stored", "type": "main", "index": 0}]]}
   },

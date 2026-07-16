@@ -121,6 +121,49 @@
     },
     {
       "parameters": {
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst local = mime.startsWith('text/')\n  || /wordprocessingml\\.document|application\\/(json|xml|csv)/i.test(mime)\n  || /\\.(docx|txt|md|csv|json|xml)$/.test(name);\nreturn local ? [{ json: $json, binary: $binary }] : [];"
+      },
+      "id": "8e99166b-1a55-4cf2-b67a-cafc7af1f3d9",
+      "name": "Filter Local Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [410, 650]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst local = mime.startsWith('text/')\n  || /wordprocessingml\\.document|application\\/(json|xml|csv)/i.test(mime)\n  || /\\.(docx|txt|md|csv|json|xml)$/.test(name);\nreturn local ? [] : [{ json: $json, binary: $binary }];"
+      },
+      "id": "47f3d787-c22f-4a59-be6e-12cd42363ca8",
+      "name": "Filter Gemini Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [410, 560]
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "data",
+        "destinationKey": "document_base64",
+        "options": {"keepSource": "json"}
+      },
+      "id": "8cbc1c5d-581f-4660-958f-d177ed18614e",
+      "name": "Read Local Document Binary",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [650, 650]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mammoth = require('mammoth');\nconst original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst buffer = Buffer.from(String($json.document_base64 || ''), 'base64');\nlet extracted = '';\nlet provider = 'local-text';\n\nif (/wordprocessingml\\.document/i.test(mime) || name.endsWith('.docx')) {\n  const result = await mammoth.extractRawText({ buffer });\n  extracted = String(result.value || '').trim();\n  provider = 'mammoth';\n} else {\n  extracted = buffer.toString('utf8').replace(/^\\uFEFF/, '').trim();\n}\n\nconst caption = String(original.normalized_text || '').trim();\nconst normalized = [caption, extracted].filter(Boolean).join('\\n\\n').trim();\nreturn [{ json: {\n  ...original,\n  raw_text: caption || extracted,\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: { ...original.raw_payload, extraction: { provider, media_kind: original.media_kind } }\n} }];"
+      },
+      "id": "0a7aae3e-23e0-45ad-a87d-4eaa0a7a1df5",
+      "name": "Extract DOCX or Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [890, 650]
+    },
+    {
+      "parameters": {
         "resource": "audio",
         "operation": "transcribe",
         "modelId": {"__rl": true, "value": "models/gemini-3.1-flash-lite", "mode": "id"},
@@ -386,7 +429,14 @@
     "Filter Document": {"main": [[{"node": "Download Document", "type": "main", "index": 0}]]},
     "Download Voice": {"main": [[{"node": "Transcribe Voice with Gemini", "type": "main", "index": 0}]]},
     "Download Photo": {"main": [[{"node": "Analyze Photo with Gemini", "type": "main", "index": 0}]]},
-    "Download Document": {"main": [[{"node": "Analyze Document with Gemini", "type": "main", "index": 0}]]},
+    "Download Document": {"main": [[
+      {"node": "Filter Local Document", "type": "main", "index": 0},
+      {"node": "Filter Gemini Document", "type": "main", "index": 0}
+    ]]},
+    "Filter Local Document": {"main": [[{"node": "Read Local Document Binary", "type": "main", "index": 0}]]},
+    "Read Local Document Binary": {"main": [[{"node": "Extract DOCX or Text", "type": "main", "index": 0}]]},
+    "Extract DOCX or Text": {"main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]},
+    "Filter Gemini Document": {"main": [[{"node": "Analyze Document with Gemini", "type": "main", "index": 0}]]},
     "Transcribe Voice with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
     "Analyze Photo with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
     "Analyze Document with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
@@ -430,7 +480,7 @@
       "main": [[{"node": "Persist Attachment Metadata", "type": "main", "index": 0}]]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "saveExecutionProgress": true,
