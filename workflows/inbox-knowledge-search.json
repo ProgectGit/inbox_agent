@@ -1,0 +1,171 @@
+{
+  "id": "InboxKnowledgeSearch01",
+  "name": "Inbox — Hybrid Knowledge Search",
+  "nodes": [
+    {
+      "parameters": {"inputSource": "passthrough"},
+      "id": "021c7849-6ef4-4584-8a78-802844b2fae4",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-760, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH owner_user AS (\n  SELECT id\n  FROM inbox.users\n  WHERE telegram_user_id = $1::bigint\n    AND status = 'active'\n  LIMIT 1\n),\nsearch_query AS (\n  SELECT websearch_to_tsquery('simple', $2::text) AS value\n),\nranked AS (\n  SELECT\n    knowledge.id,\n    knowledge.title,\n    knowledge.summary,\n    knowledge.content,\n    knowledge.source_url,\n    projects.name AS project,\n    categories.name AS category,\n    item_types.name AS item_type,\n    priorities.name AS priority,\n    ts_rank_cd(\n      to_tsvector('simple', concat_ws(' ', knowledge.title, knowledge.summary, knowledge.content)),\n      search_query.value\n    ) AS score\n  FROM inbox.knowledge_items AS knowledge\n  JOIN owner_user ON owner_user.id = knowledge.user_id\n  CROSS JOIN search_query\n  LEFT JOIN inbox.projects ON projects.id = knowledge.project_id\n  LEFT JOIN inbox.categories ON categories.id = knowledge.category_id\n  LEFT JOIN inbox.item_types ON item_types.id = knowledge.item_type_id\n  LEFT JOIN inbox.priorities ON priorities.id = knowledge.priority_id\n  WHERE to_tsvector('simple', concat_ws(' ', knowledge.title, knowledge.summary, knowledge.content)) @@ search_query.value\n     OR concat_ws(' ', knowledge.title, knowledge.summary, knowledge.content) ILIKE ('%' || $2::text || '%')\n  ORDER BY score DESC, knowledge.updated_at DESC\n  LIMIT 8\n)\nSELECT\n  EXISTS (SELECT 1 FROM owner_user) AS authorized,\n  COALESCE((SELECT id::text FROM owner_user), '') AS user_id,\n  $2::text AS query,\n  $3::text AS chat_id,\n  COALESCE(\n    (SELECT jsonb_agg(jsonb_build_object(\n      'knowledge_item_id', id::text,\n      'title', title,\n      'summary', summary,\n      'content', left(content, 1200),\n      'source_url', source_url,\n      'project', project,\n      'category', category,\n      'item_type', item_type,\n      'priority', priority,\n      'score', score\n    )) FROM ranked),\n    '[]'::jsonb\n  ) AS lexical_results;",
+        "options": {
+          "queryReplacement": "={{ [ $json.telegram_user_id, $json.query, $json.source_chat_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "106c6421-c4b9-49f4-8c96-8a1d39fc1a8a",
+      "name": "Authorize and Lexical Search",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [-510, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "mode": "load",
+        "qdrantCollection": {"__rl": true, "value": "inbox_memory", "mode": "list", "cachedResultName": "inbox_memory"},
+        "prompt": "={{ $json.query }}",
+        "topK": 8,
+        "includeDocumentMetadata": true,
+        "options": {
+          "searchFilterJson": "={{ { must: [ { key: 'metadata.user_id', match: { value: $json.user_id } } ] } }}",
+          "contentPayloadKey": "content",
+          "metadataPayloadKey": "metadata"
+        }
+      },
+      "id": "9dc81c68-852e-4b89-9865-c52c7dbfe28d",
+      "name": "Semantic Search in Qdrant",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "position": [-250, 0],
+      "credentials": {"qdrantApi": {"id": "1300f473-db92-43ce-b7b5-4ca77738d433", "name": "Inbox Agent Qdrant"}}
+    },
+    {
+      "parameters": {"modelName": "models/gemini-embedding-001"},
+      "id": "fd2ad1bc-2b1a-4985-b9ef-137297d2ebf4",
+      "name": "Gemini Search Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [-250, 220],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Authorize and Lexical Search').first().json;\nconst vectorResults = $input.all()\n  .filter((item) => item.json.document?.pageContent)\n  .map((item) => ({\n    content: item.json.document.pageContent,\n    metadata: item.json.document.metadata || {},\n    score: item.json.score\n  }));\n\nreturn [{ json: {\n  authorized: search.authorized,\n  user_id: search.user_id,\n  chat_id: search.chat_id,\n  query: search.query,\n  lexical_results: search.lexical_results || [],\n  vector_results: vectorResults\n} }];"
+      },
+      "id": "c6e4f2bd-acb1-446f-a082-d7ed39571d9b",
+      "name": "Merge Hybrid Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ти пошуковий асистент Другого Мозку. Відповідай українською мовою лише на основі результатів пошуку нижче.\n\nПравила:\n- спочатку дай пряму коротку відповідь на запит;\n- потім наведи до 5 найрелевантніших записів списком;\n- для кожного вкажи назву та, якщо доступно, проєкт/категорію;\n- не вигадуй даних;\n- якщо релевантних даних немає, чесно скажи, що в пам'яті нічого не знайдено;\n- не показуй технічні JSON, UUID або score.\n\nЗапит користувача:\n{{ $json.query }}\n\nТочні результати PostgreSQL:\n{{ JSON.stringify($json.lexical_results) }}\n\nСемантичні результати Qdrant:\n{{ JSON.stringify($json.vector_results) }}",
+        "hasOutputParser": false,
+        "needsFallback": false,
+        "batching": {"batchSize": 1, "delayBetweenBatches": 0}
+      },
+      "id": "75992ea4-3ef8-4910-8097-08fe8c72cde5",
+      "name": "Answer from Memory",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {"temperature": 0.1}
+      },
+      "id": "e3559bda-2b5e-4cdb-8668-af1e6eb19c94",
+      "name": "Gemini Search Answer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [280, 220],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Merge Hybrid Results').first().json;\nconst response = source.authorized\n  ? String($json.text || $json.output || 'У пам’яті нічого не знайдено.').trim()\n  : '⛔ Доступ до Inbox Agent не дозволено.';\nreturn [{ json: { ...source, response } }];"
+      },
+      "id": "e11a7615-c474-45ff-a77d-5fd806cd32e1",
+      "name": "Prepare Search Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [530, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH conversation_row AS (\n  INSERT INTO inbox.conversations (user_id, channel, external_conversation_id)\n  SELECT $1::uuid, 'telegram', $2::text\n  WHERE $5::boolean\n  ON CONFLICT (user_id, channel, external_conversation_id) DO UPDATE SET updated_at = now()\n  RETURNING id\n),\nuser_message AS (\n  INSERT INTO inbox.messages (conversation_id, role, content, metadata)\n  SELECT id, 'user', $3::text, jsonb_build_object('kind', 'knowledge_search')\n  FROM conversation_row\n  RETURNING conversation_id\n),\nassistant_message AS (\n  INSERT INTO inbox.messages (conversation_id, role, content, metadata)\n  SELECT conversation_id, 'assistant', $4::text, jsonb_build_object('kind', 'knowledge_search_result')\n  FROM user_message\n  RETURNING conversation_id\n)\nSELECT $2::text AS chat_id, $4::text AS response;",
+        "options": {
+          "queryReplacement": "={{ [ $json.user_id, $json.chat_id, $json.query, $json.response, $json.authorized ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "3142ca03-700c-46ed-86a6-1fe15db02bed",
+      "name": "Log Search Conversation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [780, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.response }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "24373ea5-c248-43ce-9308-a1f27b3bc0e0",
+      "name": "Send Search Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [1030, 0],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {"main": [[{"node": "Authorize and Lexical Search", "type": "main", "index": 0}]]},
+    "Authorize and Lexical Search": {"main": [[{"node": "Semantic Search in Qdrant", "type": "main", "index": 0}]]},
+    "Gemini Search Embeddings": {"ai_embedding": [[{"node": "Semantic Search in Qdrant", "type": "ai_embedding", "index": 0}]]},
+    "Semantic Search in Qdrant": {"main": [[{"node": "Merge Hybrid Results", "type": "main", "index": 0}]]},
+    "Merge Hybrid Results": {"main": [[{"node": "Answer from Memory", "type": "main", "index": 0}]]},
+    "Gemini Search Answer": {"ai_languageModel": [[{"node": "Answer from Memory", "type": "ai_languageModel", "index": 0}]]},
+    "Answer from Memory": {"main": [[{"node": "Prepare Search Reply", "type": "main", "index": 0}]]},
+    "Prepare Search Reply": {"main": [[{"node": "Log Search Conversation", "type": "main", "index": 0}]]},
+    "Log Search Conversation": {"main": [[{"node": "Send Search Reply", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "67ac827d-e2f1-49cf-99b0-acde5420b2e6",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}

@@ -1,0 +1,74 @@
+name: inbox-agent
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: inbox-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: n8n_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: n8n_agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n_agent -d n8n_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - inbox_agent_internal
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: inbox-agent-n8n
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n_agent
+      DB_POSTGRESDB_USER: n8n_agent
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: inbox.mihabot.top
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_PROXY_HOPS: 1
+      N8N_SECURE_COOKIE: "true"
+      N8N_EDITOR_BASE_URL: https://inbox.mihabot.top/
+      WEBHOOK_URL: https://inbox.mihabot.top/
+      GENERIC_TIMEZONE: Europe/Kiev
+      TZ: Europe/Kiev
+    ports:
+      - "127.0.0.1:5679:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - inbox_agent_internal
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: inbox-agent-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - inbox_agent_internal
+
+volumes:
+  postgres_data:
+  n8n_data:
+  qdrant_data:
+
+networks:
+  inbox_agent_internal:
+    driver: bridge

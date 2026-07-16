@@ -1,0 +1,229 @@
+{
+  "id": "InboxAiClassification01",
+  "name": "Inbox — AI Classification",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "f201d416-1ac6-4971-9422-f7de6b2d8b64",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-820, -100]
+    },
+    {
+      "parameters": {},
+      "id": "04c1817b-4f68-410f-aa03-309a099227d2",
+      "name": "Manual Test Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-820, 120]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(\n  nullif($1::text, '')::uuid,\n  (\n    SELECT id\n    FROM inbox.inbox_items\n    WHERE status IN ('received', 'analyzing')\n      AND normalized_text IS NOT NULL\n      AND NOT EXISTS (\n        SELECT 1 FROM inbox.knowledge_items\n        WHERE knowledge_items.inbox_item_id = inbox_items.id\n      )\n    ORDER BY received_at\n    LIMIT 1\n  )\n)::text AS item_id\nWHERE COALESCE(\n  nullif($1::text, '')::uuid,\n  (\n    SELECT id\n    FROM inbox.inbox_items\n    WHERE status IN ('received', 'analyzing')\n      AND normalized_text IS NOT NULL\n      AND NOT EXISTS (\n        SELECT 1 FROM inbox.knowledge_items\n        WHERE knowledge_items.inbox_item_id = inbox_items.id\n      )\n    ORDER BY received_at\n    LIMIT 1\n  )\n) IS NOT NULL;",
+        "options": {
+          "queryReplacement": "={{ [ $json.item_id || '' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "b25ff7b7-b43d-4145-9e0f-afeef391bca4",
+      "name": "Resolve Input Item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-590, 120],
+      "credentials": {
+        "postgres": {
+          "id": "384ec057-10f8-41b5-9d1b-f587c652e358",
+          "name": "Inbox Agent PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target AS (\n  UPDATE inbox.inbox_items\n  SET status = 'analyzing',\n      error_code = NULL,\n      error_message = NULL\n  WHERE id = $1::uuid\n    AND status IN ('received', 'analyzing', 'failed', 'needs_review')\n  RETURNING *\n)\nSELECT\n  target.id::text AS item_id,\n  target.user_id::text AS user_id,\n  target.content_type,\n  target.normalized_text,\n  target.source_url,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.categories WHERE is_active) AS categories,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.projects WHERE is_active) AS projects,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.item_types WHERE is_active) AS item_types,\n  (SELECT jsonb_agg(name ORDER BY rank) FROM inbox.priorities) AS priorities\nFROM target;",
+        "options": {
+          "queryReplacement": "={{ [ $json.item_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "1a8917c7-8218-495a-9631-b3e889ce925a",
+      "name": "Load Inbox Item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [-340, 0],
+      "credentials": {
+        "postgres": {
+          "id": "384ec057-10f8-41b5-9d1b-f587c652e358",
+          "name": "Inbox Agent PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ти класифікатор Inbox Agent. Проаналізуй матеріал і поверни тільки структурований результат, який відповідає підключеній JSON-схемі.\n\nПравила:\n- title і summary формуй мовою матеріалу;\n- обирай рівно одне значення з кожного дозволеного списку;\n- якщо немає чіткої відповідності, використовуй Other;\n- priority за замовчуванням Medium;\n- tags: 3–10 коротких тегів без символу #;\n- next_actions: максимум 5 конкретних дій, порожній масив якщо дії не потрібні;\n- не додавай фактів, яких немає у матеріалі.\n\nДозволені категорії: {{ $json.categories.join(', ') }}\nДозволені проєкти: {{ $json.projects.join(', ') }}\nДозволені типи: {{ $json.item_types.join(', ') }}\nДозволені пріоритети: {{ $json.priorities.join(', ') }}\n\nТип вхідних даних: {{ $json.content_type }}\nURL: {{ $json.source_url || 'немає' }}\nМатеріал:\n{{ $json.normalized_text }}",
+        "hasOutputParser": true,
+        "needsFallback": false,
+        "batching": {
+          "batchSize": 1,
+          "delayBetweenBatches": 0
+        }
+      },
+      "id": "d6562421-1da3-4007-a6ac-1148eaa9aa5b",
+      "name": "Classify Knowledge",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "position": [-60, 0]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "id": "5bba26fc-a4a7-46fc-a00b-0b4df2f35cb2",
+      "name": "Gemini Classifier",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [-180, 240],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "xWUoG184a9kWLGEL",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"title\": {\"type\": \"string\", \"minLength\": 3, \"maxLength\": 160},\n    \"summary\": {\"type\": \"string\", \"minLength\": 3, \"maxLength\": 1000},\n    \"category\": {\"type\": \"string\", \"enum\": [\"Programming\", \"AI\", \"Medicine\", \"Backend\", \"Frontend\", \"Flutter\", \"JavaScript\", \"TypeScript\", \"Node.js\", \"NestJS\", \"PostgreSQL\", \"Docker\", \"DevOps\", \"WordPress\", \"Shopify\", \"SEO\", \"Marketing\", \"Business\", \"Finance\", \"Crypto\", \"Hardware\", \"Books\", \"Courses\", \"Research\", \"Ideas\", \"Personal\", \"Work\", \"Family\", \"Health\", \"Other\"]},\n    \"project\": {\"type\": \"string\", \"enum\": [\"Panakea\", \"AI Studio\", \"Second Brain\", \"Dashboard\", \"Shopify Studio\", \"SafeMind\", \"Academy\", \"Personal\", \"Work\", \"Other\"]},\n    \"type\": {\"type\": \"string\", \"enum\": [\"Idea\", \"Task\", \"Question\", \"Research\", \"Article\", \"Book\", \"Course\", \"Video\", \"Screenshot\", \"Document\", \"Bug\", \"Feature\", \"Reminder\", \"Conversation\", \"Snippet\", \"Meeting\"]},\n    \"priority\": {\"type\": \"string\", \"enum\": [\"Critical\", \"High\", \"Medium\", \"Low\"]},\n    \"tags\": {\"type\": \"array\", \"maxItems\": 12, \"items\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 64}},\n    \"next_actions\": {\"type\": \"array\", \"maxItems\": 5, \"items\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 300}},\n    \"language\": {\"type\": \"string\", \"minLength\": 2, \"maxLength\": 8}\n  },\n  \"required\": [\"title\", \"summary\", \"category\", \"project\", \"type\", \"priority\", \"tags\", \"next_actions\", \"language\"]\n}",
+        "autoFix": true,
+        "customizeRetryPrompt": false
+      },
+      "id": "4e764da2-e090-409d-aaf0-c04a018a252c",
+      "name": "Classification Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [40, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Load Inbox Item').item.json;\nconst analysis = $json.output || $json;\nconst categories = new Set(source.categories);\nconst projects = new Set(source.projects);\nconst itemTypes = new Set(source.item_types);\nconst priorities = new Set(source.priorities);\n\nconst cleanList = (value, limit) => [...new Set((Array.isArray(value) ? value : [])\n  .map((entry) => String(entry).trim().replace(/^#+/, ''))\n  .filter(Boolean))].slice(0, limit);\n\nreturn [{ json: {\n  item_id: source.item_id,\n  user_id: source.user_id,\n  title: String(analysis.title || source.normalized_text.slice(0, 120)).trim().slice(0, 160),\n  summary: String(analysis.summary || source.normalized_text.slice(0, 500)).trim().slice(0, 1000),\n  content: source.normalized_text,\n  source_url: source.source_url || null,\n  category: categories.has(analysis.category) ? analysis.category : 'Other',\n  project: projects.has(analysis.project) ? analysis.project : 'Other',\n  item_type: itemTypes.has(analysis.type) ? analysis.type : 'Idea',\n  priority: priorities.has(analysis.priority) ? analysis.priority : 'Medium',\n  tags: cleanList(analysis.tags, 12),\n  next_actions: cleanList(analysis.next_actions, 5),\n  language: String(analysis.language || 'uk').trim().slice(0, 8)\n} }];"
+      },
+      "id": "3feb282c-4f9a-41ae-bbd7-17c9a0640f1f",
+      "name": "Validate Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH resolved AS (\n  SELECT\n    $1::uuid AS inbox_item_id,\n    (SELECT user_id FROM inbox.inbox_items WHERE id = $1::uuid) AS user_id,\n    COALESCE((SELECT id FROM inbox.projects WHERE name = $5), (SELECT id FROM inbox.projects WHERE name = 'Other')) AS project_id,\n    COALESCE((SELECT id FROM inbox.categories WHERE name = $6), (SELECT id FROM inbox.categories WHERE name = 'Other')) AS category_id,\n    COALESCE((SELECT id FROM inbox.item_types WHERE name = $7), (SELECT id FROM inbox.item_types WHERE name = 'Idea')) AS item_type_id,\n    COALESCE((SELECT id FROM inbox.priorities WHERE name = $8), (SELECT id FROM inbox.priorities WHERE name = 'Medium')) AS priority_id\n),\nupserted AS (\n  INSERT INTO inbox.knowledge_items (\n    inbox_item_id, user_id, project_id, category_id, item_type_id, priority_id,\n    title, summary, content, language, source_url, next_actions\n  )\n  SELECT\n    resolved.inbox_item_id, resolved.user_id, resolved.project_id, resolved.category_id,\n    resolved.item_type_id, resolved.priority_id, $2, $3, $4, $11, nullif($12, ''), $10::jsonb\n  FROM resolved\n  ON CONFLICT (inbox_item_id) DO UPDATE SET\n    project_id = EXCLUDED.project_id,\n    category_id = EXCLUDED.category_id,\n    item_type_id = EXCLUDED.item_type_id,\n    priority_id = EXCLUDED.priority_id,\n    title = EXCLUDED.title,\n    summary = EXCLUDED.summary,\n    content = EXCLUDED.content,\n    language = EXCLUDED.language,\n    source_url = EXCLUDED.source_url,\n    next_actions = EXCLUDED.next_actions\n  RETURNING id, inbox_item_id\n),\ntag_values AS (\n  SELECT DISTINCT\n    left(trim(value), 64) AS name,\n    lower(left(trim(value), 64)) AS normalized_name\n  FROM jsonb_array_elements_text($9::jsonb) AS value\n  WHERE trim(value) <> ''\n),\ncreated_tags AS (\n  INSERT INTO inbox.tags (name, normalized_name)\n  SELECT name, normalized_name FROM tag_values\n  ON CONFLICT (normalized_name) DO UPDATE SET name = EXCLUDED.name\n  RETURNING id, normalized_name\n),\ndeleted_links AS (\n  DELETE FROM inbox.knowledge_item_tags\n  WHERE knowledge_item_id = (SELECT id FROM upserted)\n  RETURNING tag_id\n),\nlinked_tags AS (\n  INSERT INTO inbox.knowledge_item_tags (knowledge_item_id, tag_id)\n  SELECT upserted.id, created_tags.id\n  FROM upserted\n  JOIN created_tags ON true\n  CROSS JOIN (SELECT count(*) FROM deleted_links) AS deletion_done\n  ON CONFLICT DO NOTHING\n  RETURNING tag_id\n),\nupdated_inbox AS (\n  UPDATE inbox.inbox_items\n  SET status = 'ready', processed_at = now(), error_code = NULL, error_message = NULL\n  WHERE id = $1::uuid\n  RETURNING id\n),\nenqueued AS (\n  INSERT INTO inbox.processing_jobs (inbox_item_id, job_type, status)\n  SELECT $1::uuid, 'index', 'pending'\n  WHERE NOT EXISTS (\n    SELECT 1 FROM inbox.processing_jobs\n    WHERE inbox_item_id = $1::uuid\n      AND job_type = 'index'\n      AND status IN ('pending', 'running')\n  )\n  RETURNING id\n)\nSELECT\n  upserted.id::text AS knowledge_item_id,\n  upserted.inbox_item_id::text AS inbox_item_id,\n  $2::text AS title,\n  $5::text AS project,\n  $6::text AS category,\n  $7::text AS item_type,\n  $8::text AS priority,\n  (SELECT count(*) FROM linked_tags) AS tag_count,\n  EXISTS (SELECT 1 FROM enqueued) AS indexing_enqueued\nFROM upserted;",
+        "options": {
+          "queryReplacement": "={{ [ $json.item_id, $json.title, $json.summary, $json.content, $json.project, $json.category, $json.item_type, $json.priority, JSON.stringify($json.tags), JSON.stringify($json.next_actions), $json.language, $json.source_url || '' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "6752d3cc-00ac-4848-9bf1-bd7294f83eb7",
+      "name": "Persist Knowledge Item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [500, 0],
+      "credentials": {
+        "postgres": {
+          "id": "384ec057-10f8-41b5-9d1b-f587c652e358",
+          "name": "Inbox Agent PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "InboxKnowledgeIndexing01",
+          "mode": "list",
+          "cachedResultName": "Inbox — Knowledge Indexing"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "58989c70-8403-4503-befa-f449128f8a1b",
+      "name": "Start Knowledge Indexing",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [750, 0]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [[{"node": "Resolve Input Item", "type": "main", "index": 0}]]
+    },
+    "Manual Test Trigger": {
+      "main": [[{"node": "Resolve Input Item", "type": "main", "index": 0}]]
+    },
+    "Resolve Input Item": {
+      "main": [[{"node": "Load Inbox Item", "type": "main", "index": 0}]]
+    },
+    "Load Inbox Item": {
+      "main": [[{"node": "Classify Knowledge", "type": "main", "index": 0}]]
+    },
+    "Classify Knowledge": {
+      "main": [[{"node": "Validate Classification", "type": "main", "index": 0}]]
+    },
+    "Gemini Classifier": {
+      "ai_languageModel": [[
+        {"node": "Classify Knowledge", "type": "ai_languageModel", "index": 0},
+        {"node": "Classification Schema", "type": "ai_languageModel", "index": 0}
+      ]]
+    },
+    "Classification Schema": {
+      "ai_outputParser": [[{"node": "Classify Knowledge", "type": "ai_outputParser", "index": 0}]]
+    },
+    "Validate Classification": {
+      "main": [[{"node": "Persist Knowledge Item", "type": "main", "index": 0}]]
+    },
+    "Persist Knowledge Item": {
+      "main": [[{"node": "Start Knowledge Indexing", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "f545a93c-7b0b-4705-885f-943d6ef220d8",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

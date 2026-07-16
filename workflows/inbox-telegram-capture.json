@@ -1,0 +1,265 @@
+{
+  "id": "InboxTelegramCapture01",
+  "name": "Inbox — Telegram Capture",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "df51dc2a-c056-452d-96b0-95209d4bf9a6",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -720,
+        0
+      ],
+      "webhookId": "580f640c-b7b2-40e4-a2f0-ff46060f646f",
+      "credentials": {
+        "telegramApi": {
+          "id": "iIA8c9213PIlR1Zm",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\nconst message = input.message || {};\nconst rawText = String(message.text || message.caption || '');\nconst normalizedText = rawText.trim().replace(/\\s+/g, ' ');\nconst lower = normalizedText.toLocaleLowerCase('uk-UA');\nconst urls = normalizedText.match(/https?:\\/\\/[^\\s]+/gi) || [];\nconst forceCapture = /^\\/(save|inbox)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText);\nconst searchIntent = !forceCapture && (\n  /^\\/(search|find)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText) ||\n  /^(знайди|знайдіть|покажи|покажіть|що я знаю|що в мене є|які (?:в мене|у мене)|пошукай|де (?:в мене|у мене))\\b/i.test(lower)\n);\nconst query = normalizedText\n  .replace(/^\\/(search|find)(?:@\\w+)?\\s*/i, '')\n  .trim();\nconst captureText = normalizedText\n  .replace(/^\\/(save|inbox)(?:@\\w+)?\\s*/i, '')\n  .trim();\nconst supported = normalizedText.length > 0;\n\nreturn [{\n  json: {\n    telegram_user_id: String(message.from?.id || ''),\n    source_message_id: String(message.message_id || ''),\n    source_chat_id: String(message.chat?.id || ''),\n    content_type: urls.length > 0 ? 'link' : 'text',\n    raw_text: rawText,\n    normalized_text: forceCapture ? captureText : normalizedText,\n    source_url: urls[0] || null,\n    supported,\n    intent: searchIntent ? 'search' : 'capture',\n    query,\n    raw_payload: input\n  }\n}];"
+      },
+      "id": "6659bb9c-3804-47e1-935b-75b5c1f7a288",
+      "name": "Normalize Telegram Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.intent === 'search') return [];\nreturn [{ json: $json }];"
+      },
+      "id": "b236ef97-93f9-430b-b930-c8235c990478",
+      "name": "Pass Capture Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.intent !== 'search' || !$json.query) return [];\nreturn [{ json: {\n  telegram_user_id: $json.telegram_user_id,\n  source_chat_id: $json.source_chat_id,\n  query: $json.query\n} }];"
+      },
+      "id": "e2f1de87-44a1-4582-a0e0-f94c00518db3",
+      "name": "Pass Search Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH owner_user AS (\n  SELECT id\n  FROM inbox.users\n  WHERE telegram_user_id = $1::bigint\n    AND status = 'active'\n  LIMIT 1\n),\ncandidate AS (\n  SELECT\n    id AS user_id,\n    encode(digest($6::text, 'sha256'), 'hex') AS content_hash\n  FROM owner_user\n  WHERE $9::boolean\n    AND nullif($6::text, '') IS NOT NULL\n),\ninserted AS (\n  INSERT INTO inbox.inbox_items (\n    user_id,\n    source,\n    source_message_id,\n    source_chat_id,\n    source_url,\n    content_type,\n    raw_text,\n    normalized_text,\n    raw_payload,\n    content_hash,\n    status\n  )\n  SELECT\n    candidate.user_id,\n    'telegram',\n    $2::text,\n    $3::text,\n    nullif($8::text, ''),\n    $4::text,\n    $5::text,\n    $6::text,\n    $7::jsonb,\n    candidate.content_hash,\n    'received'\n  FROM candidate\n  ON CONFLICT DO NOTHING\n  RETURNING id\n),\nexisting AS (\n  SELECT inbox_items.id\n  FROM inbox.inbox_items\n  JOIN owner_user ON owner_user.id = inbox_items.user_id\n  WHERE (\n      inbox_items.source = 'telegram'\n      AND inbox_items.source_message_id = $2::text\n    )\n    OR inbox_items.content_hash = encode(digest($6::text, 'sha256'), 'hex')\n  ORDER BY inbox_items.created_at DESC\n  LIMIT 1\n)\nSELECT\n  EXISTS (SELECT 1 FROM owner_user) AS authorized,\n  $9::boolean AS supported,\n  COALESCE(\n    (SELECT id FROM inserted LIMIT 1),\n    (SELECT id FROM existing LIMIT 1)\n  )::text AS item_id,\n  EXISTS (SELECT 1 FROM inserted) AS created,\n  $3::text AS source_chat_id,\n  $4::text AS content_type,\n  left($6::text, 180) AS preview;",
+        "options": {
+          "queryReplacement": "={{ [ $json.telegram_user_id, $json.source_message_id, $json.source_chat_id, $json.content_type, $json.raw_text, $json.normalized_text, JSON.stringify($json.raw_payload), $json.source_url || '', $json.supported ] }}",
+          "queryBatching": "independently",
+          "replaceEmptyStrings": false
+        }
+      },
+      "id": "eab1282f-48d7-4361-b44c-a9d4159eccfb",
+      "name": "Authorize and Save Inbox Item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [
+        -180,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "384ec057-10f8-41b5-9d1b-f587c652e358",
+          "name": "Inbox Agent PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\nlet reply;\n\nif (!row.authorized) {\n  reply = '⛔ Доступ до Inbox Agent не дозволено.';\n} else if (!row.supported) {\n  reply = 'Поки що я приймаю текст і посилання. Голос, фото та файли додамо наступним етапом.';\n} else if (row.created) {\n  const kind = row.content_type === 'link' ? 'посилання' : 'текст';\n  reply = `📥 Збережено ${kind} у Inbox.\\n\\n${row.preview}`;\n} else {\n  reply = `♻️ Цей матеріал уже є в Inbox.\\n\\n${row.preview}`;\n}\n\nreturn [{ json: { chat_id: row.source_chat_id, reply, item_id: row.item_id || null } }];"
+      },
+      "id": "d97da128-e4a5-49e2-ae34-dba6c0cd71cd",
+      "name": "Prepare Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "8246b1ba-c790-4dfb-879b-73902ab3f806",
+      "name": "Send Capture Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [
+        380,
+        0
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "iIA8c9213PIlR1Zm",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\nif (!row.authorized || !row.supported || !row.created || !row.item_id) {\n  return [];\n}\nreturn [{ json: { item_id: row.item_id } }];"
+      },
+      "id": "9e2eef12-2b68-4395-8034-ceb9889f0bf8",
+      "name": "Queue New Item for Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "InboxAiClassification01",
+          "mode": "list",
+          "cachedResultName": "Inbox — AI Classification"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "85a8f3c2-3217-476f-99b4-259eec570e62",
+      "name": "Start AI Classification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        380,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "InboxKnowledgeSearch01",
+          "mode": "list",
+          "cachedResultName": "Inbox — Hybrid Knowledge Search"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {"waitForSubWorkflow": false}
+      },
+      "id": "e17a211d-fc7c-4cf0-a280-cd795d214022",
+      "name": "Start Hybrid Search",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [-40, 220]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{
+        "node": "Normalize Telegram Input",
+        "type": "main",
+        "index": 0
+      }]]
+    },
+    "Normalize Telegram Input": {
+      "main": [[
+        {"node": "Pass Capture Requests", "type": "main", "index": 0},
+        {"node": "Pass Search Requests", "type": "main", "index": 0}
+      ]]
+    },
+    "Pass Capture Requests": {
+      "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
+    },
+    "Pass Search Requests": {
+      "main": [[{"node": "Start Hybrid Search", "type": "main", "index": 0}]]
+    },
+    "Authorize and Save Inbox Item": {
+      "main": [[
+        {
+          "node": "Prepare Confirmation",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Queue New Item for Classification",
+          "type": "main",
+          "index": 0
+        }
+      ]]
+    },
+    "Prepare Confirmation": {
+      "main": [[{
+        "node": "Send Capture Confirmation",
+        "type": "main",
+        "index": 0
+      }]]
+    },
+    "Queue New Item for Classification": {
+      "main": [[{
+        "node": "Start AI Classification",
+        "type": "main",
+        "index": 0
+      }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "c8a8a84f-f697-478b-87df-4baaf76e6c12",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
