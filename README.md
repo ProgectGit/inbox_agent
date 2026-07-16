@@ -40,8 +40,8 @@ AI nodes:
   semantic search, with a grounded Gemini answer.
 - `Inbox — Recovery and Monitoring`: a five-minute watchdog that recovers stale
   work, retries analysis/indexing, stops exhausted jobs, and sends alerts.
-- `Inbox — Backblaze B2 Original Upload`: a prepared S3-compatible original-file
-  upload workflow. It stays inactive until the private B2 credential is added.
+- `Inbox — Backblaze B2 Original Upload`: an active S3-compatible original-file
+  upload workflow that processes pending attachments every minute.
 
 ## Object storage
 
@@ -51,12 +51,12 @@ production watchdog tracks successfully stored B2 objects and sends a one-time
 Telegram warning when usage crosses 7,000,000,000 bytes (7 GB), leaving room
 before the 10 GB free-tier limit.
 
-Create an n8n S3 credential named `Backblaze B2 Inbox Storage` with the endpoint,
-region, key ID, and application key from the private B2 bucket. Replace the
-placeholder credential ID in `workflows/inbox-object-storage-upload.json` before
-importing and activating that workflow.
+Production uses the private encrypted bucket `inbox-agent-progectxo` through the
+n8n S3 credential `Backblaze B2 Inbox Storage`. The workflow stores originals
+under user/year/month/attachment paths and records each resulting object key in
+PostgreSQL.
 
-All five workflows are published on the production n8n instance. The older
+All six workflows are published on the production n8n instance. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
 and must remain inactive because a Telegram bot should have only one production
 webhook entry point.

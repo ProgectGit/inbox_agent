@@ -11,11 +11,19 @@
       "position": [-620, 0]
     },
     {
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 1}]}},
+      "id": "0f7af36f-320b-4964-8552-34ddfe2f4db1",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-620, 160]
+    },
+    {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH candidate AS (\n  SELECT attachments.id\n  FROM inbox.attachments\n  WHERE attachments.telegram_file_id IS NOT NULL\n    AND attachments.upload_status IN ('metadata_only', 'pending', 'failed')\n    AND ($1::text = '' OR attachments.id = $1::uuid)\n  ORDER BY attachments.created_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED\n),\nclaimed AS (\n  UPDATE inbox.attachments AS attachments\n  SET upload_status = 'uploading',\n      storage_provider = 'backblaze_b2',\n      storage_bucket = $2::text,\n      storage_error = NULL\n  FROM candidate\n  WHERE attachments.id = candidate.id\n  RETURNING attachments.*\n)\nSELECT\n  claimed.id::text AS attachment_id,\n  claimed.inbox_item_id::text AS inbox_item_id,\n  items.user_id::text AS user_id,\n  claimed.telegram_file_id,\n  claimed.original_name,\n  claimed.mime_type,\n  claimed.size_bytes,\n  claimed.storage_bucket,\n  concat(\n    'users/', items.user_id::text, '/',\n    to_char(claimed.created_at, 'YYYY/MM'), '/',\n    claimed.id::text, '/',\n    regexp_replace(COALESCE(claimed.original_name, claimed.id::text), '[^a-zA-Z0-9._-]+', '_', 'g')\n  ) AS object_key\nFROM claimed\nJOIN inbox.inbox_items AS items ON items.id = claimed.inbox_item_id;",
+        "query": "WITH candidate AS (\n  SELECT attachments.id\n  FROM inbox.attachments\n  WHERE attachments.telegram_file_id IS NOT NULL\n    AND attachments.upload_status IN ('metadata_only', 'pending', 'failed')\n    AND (NULLIF($1::text, '') IS NULL OR attachments.id = NULLIF($1::text, '')::uuid)\n  ORDER BY attachments.created_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED\n),\nclaimed AS (\n  UPDATE inbox.attachments AS attachments\n  SET upload_status = 'uploading',\n      storage_provider = 'backblaze_b2',\n      storage_bucket = $2::text,\n      storage_error = NULL\n  FROM candidate\n  WHERE attachments.id = candidate.id\n  RETURNING attachments.*\n)\nSELECT\n  claimed.id::text AS attachment_id,\n  claimed.inbox_item_id::text AS inbox_item_id,\n  items.user_id::text AS user_id,\n  claimed.telegram_file_id,\n  claimed.original_name,\n  claimed.mime_type,\n  claimed.size_bytes,\n  claimed.storage_bucket,\n  concat(\n    'users/', items.user_id::text, '/',\n    to_char(claimed.created_at, 'YYYY/MM'), '/',\n    claimed.id::text, '/',\n    regexp_replace(COALESCE(claimed.original_name, claimed.id::text), '[^a-zA-Z0-9._-]+', '_', 'g')\n  ) AS object_key\nFROM claimed\nJOIN inbox.inbox_items AS items ON items.id = claimed.inbox_item_id;",
         "options": {
-          "queryReplacement": "={{ [ $json.attachment_id || '', $json.storage_bucket || 'inbox-agent-files' ] }}",
+          "queryReplacement": "={{ [ $json.attachment_id || '', $json.storage_bucket || 'inbox-agent-progectxo' ] }}",
           "queryBatching": "independently"
         }
       },
@@ -56,7 +64,7 @@
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
       "position": [150, 0],
-      "credentials": {"s3": {"id": "REPLACE_WITH_B2_CREDENTIAL_ID", "name": "Backblaze B2 Inbox Storage"}}
+      "credentials": {"s3": {"id": "20YWHyHI8TuFogpn", "name": "Backblaze B2 Inbox Storage"}}
     },
     {
       "parameters": {
@@ -77,11 +85,12 @@
   ],
   "connections": {
     "When Executed by Another Workflow": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
+    "Every Minute": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
     "Claim Pending Attachment": {"main": [[{"node": "Download Original from Telegram", "type": "main", "index": 0}]]},
     "Download Original from Telegram": {"main": [[{"node": "Upload Original to B2", "type": "main", "index": 0}]]},
     "Upload Original to B2": {"main": [[{"node": "Mark Original Stored", "type": "main", "index": 0}]]}
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "saveExecutionProgress": true,
