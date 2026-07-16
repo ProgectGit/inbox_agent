@@ -68,6 +68,13 @@ supported document to save it. Gemini transcribes audio, extracts visible text
 from images, and reads documents before the normal classification and RAG
 pipeline. Archive formats remain intentionally blocked for the MVP.
 
+For ordinary HTTP/HTTPS links, the capture workflow downloads the page with a
+bounded timeout, removes scripts and layout chrome, extracts the title,
+description, and readable text, and stores that content instead of only the
+URL. Local, private-network, and cloud-metadata addresses are rejected before
+download. JavaScript-only pages and video transcripts require dedicated
+readers and may currently fall back to URL metadata.
+
 Plain-text files (`.txt`, `.md`, `.csv`, `.json`, `.xml`) and Word `.docx`
 documents are extracted locally inside n8n; `.docx` parsing uses the bundled
 `mammoth` package. This avoids sending unsupported Word MIME types to Gemini.

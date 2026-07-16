@@ -40,13 +40,86 @@
     },
     {
       "parameters": {
-        "jsCode": "if ($json.intent === 'search' || $json.media_kind) return [];\nreturn [{ json: $json }];"
+        "jsCode": "if ($json.intent === 'search' || $json.media_kind || $json.content_type === 'link') return [];\nreturn [{ json: $json }];"
       },
       "id": "b236ef97-93f9-430b-b930-c8235c990478",
       "name": "Pass Capture Requests",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [-300, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.intent === 'search' || $json.media_kind || $json.content_type !== 'link' || !$json.source_url) return [];\nreturn [{ json: $json }];"
+      },
+      "id": "8b3c74ca-8990-4a0c-a31f-a70359d0e452",
+      "name": "Pass Web Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, -220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\nlet url;\ntry { url = new URL(String(row.source_url || '')); } catch { return []; }\nif (!['http:', 'https:'].includes(url.protocol)) return [];\nconst host = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');\nconst blockedName = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || host === 'metadata.google.internal';\nconst blockedIpv4 = /^(?:0\\.|10\\.|127\\.|169\\.254\\.|192\\.168\\.|100\\.(?:6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.)/.test(host)\n  || /^172\\.(?:1[6-9]|2\\d|3[01])\\./.test(host);\nconst blockedIpv6 = host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:');\nif (blockedName || blockedIpv4 || blockedIpv6) return [];\nurl.hash = '';\nreturn [{ json: { ...row, source_url: url.toString(), web_host: host } }];"
+      },
+      "id": "da5d2846-4995-4b17-9bc0-80b96215bb0c",
+      "name": "Validate Web URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, -220]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.source_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; InboxAgent/1.0; +https://inbox.mihabot.top)"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 4
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "a68d3a35-2386-456f-a0db-9ce4bd288fc5",
+      "name": "Download Web Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [180, -220],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Validate Web URL').first().json;\nconst response = $json || {};\nconst statusCode = Number(response.statusCode || 0);\nconst headers = response.headers || {};\nconst contentType = String(headers['content-type'] || headers['Content-Type'] || '').toLowerCase();\nlet body = typeof response.body === 'string' ? response.body : typeof response.data === 'string' ? response.data : typeof response === 'string' ? response : '';\nbody = body.slice(0, 1500000);\n\nconst decode = (value) => String(value || '')\n  .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))\n  .replace(/&nbsp;/gi, ' ')\n  .replace(/&amp;/gi, '&')\n  .replace(/&quot;/gi, '\"')\n  .replace(/&#39;|&apos;/gi, \"'\")\n  .replace(/&lt;/gi, '<')\n  .replace(/&gt;/gi, '>');\n\nlet title = '';\nlet description = '';\nlet text = '';\nif (/html|xhtml/.test(contentType) || /<html|<body|<article/i.test(body)) {\n  title = decode((body.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i) || [])[1]).replace(/\\s+/g, ' ').trim();\n  description = decode((body.match(/<meta[^>]+(?:name|property)=[\"'](?:description|og:description)[\"'][^>]+content=[\"']([\\s\\S]*?)[\"'][^>]*>/i) || body.match(/<meta[^>]+content=[\"']([\\s\\S]*?)[\"'][^>]+(?:name|property)=[\"'](?:description|og:description)[\"'][^>]*>/i) || [])[1]).replace(/\\s+/g, ' ').trim();\n  text = body\n    .replace(/<!--[\\s\\S]*?-->/g, ' ')\n    .replace(/<(script|style|svg|canvas|noscript|template|form|nav|footer|header|aside)[^>]*>[\\s\\S]*?<\\/\\1>/gi, ' ')\n    .replace(/<(br|p|div|section|article|main|h[1-6]|li|tr|blockquote)[^>]*>/gi, '\\n')\n    .replace(/<[^>]+>/g, ' ');\n  text = decode(text);\n} else if (contentType.startsWith('text/') || body) {\n  text = body;\n}\ntext = text.replace(/\\r/g, '').replace(/[ \\t]+/g, ' ').replace(/ *\\n */g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\nconst useful = [title, description, text].filter(Boolean).join('\\n\\n').slice(0, 120000).trim();\nconst fallback = String(original.normalized_text || original.source_url || '').trim();\nconst normalized = useful.length >= 200 ? useful : fallback;\nreturn [{ json: {\n  ...original,\n  raw_text: fallback,\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: {\n    ...original.raw_payload,\n    extraction: {\n      provider: 'direct-html',\n      status_code: statusCode,\n      content_type: contentType,\n      title,\n      extracted_characters: useful.length,\n      complete: useful.length >= 200\n    }\n  }\n} }];"
+      },
+      "id": "2a33897c-d9b1-4bf7-8db7-aaebbc567d0a",
+      "name": "Extract Web Page Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [430, -220]
     },
     {
       "parameters": {
@@ -407,11 +480,24 @@
     "Normalize Telegram Input": {
       "main": [[
         {"node": "Pass Capture Requests", "type": "main", "index": 0},
+        {"node": "Pass Web Links", "type": "main", "index": 0},
         {"node": "Pass Search Requests", "type": "main", "index": 0},
         {"node": "Pass Media Requests", "type": "main", "index": 0}
       ]]
     },
     "Pass Capture Requests": {
+      "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
+    },
+    "Pass Web Links": {
+      "main": [[{"node": "Validate Web URL", "type": "main", "index": 0}]]
+    },
+    "Validate Web URL": {
+      "main": [[{"node": "Download Web Page", "type": "main", "index": 0}]]
+    },
+    "Download Web Page": {
+      "main": [[{"node": "Extract Web Page Text", "type": "main", "index": 0}]]
+    },
+    "Extract Web Page Text": {
       "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
     },
     "Pass Search Requests": {
