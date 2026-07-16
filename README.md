@@ -38,16 +38,23 @@ AI nodes:
   Gemini embeddings, and Qdrant indexing.
 - `Inbox — Hybrid Knowledge Search`: PostgreSQL lexical search plus Qdrant
   semantic search, with a grounded Gemini answer.
+- `Inbox — Recovery and Monitoring`: a five-minute watchdog that recovers stale
+  work, retries analysis/indexing, stops exhausted jobs, and sends an alert.
 
-All four workflows are published on the production n8n instance. The older
+All five workflows are published on the production n8n instance. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
 and must remain inactive because a Telegram bot should have only one production
 webhook entry point.
 
 ### Telegram usage
 
-Send ordinary text or a link to save it. Use `/save ...` or `/inbox ...` to
-force capture when a note begins with wording that resembles a search command.
+Send ordinary text, a link, a Telegram voice message, a photo/screenshot, or a
+supported document to save it. Gemini transcribes audio, extracts visible text
+from images, and reads documents before the normal classification and RAG
+pipeline. Archive formats remain intentionally blocked for the MVP.
+
+Use `/save ...` or `/inbox ...` to force capture when a note begins with wording
+that resembles a search command.
 
 Search the Second Brain with `/search ...`, `/find ...`, or natural Ukrainian
 phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`.

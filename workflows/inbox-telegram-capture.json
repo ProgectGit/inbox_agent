@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json;\nconst message = input.message || {};\nconst rawText = String(message.text || message.caption || '');\nconst normalizedText = rawText.trim().replace(/\\s+/g, ' ');\nconst lower = normalizedText.toLocaleLowerCase('uk-UA');\nconst urls = normalizedText.match(/https?:\\/\\/[^\\s]+/gi) || [];\nconst forceCapture = /^\\/(save|inbox)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText);\nconst searchIntent = !forceCapture && (\n  /^\\/(search|find)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText) ||\n  /^(знайди|знайдіть|покажи|покажіть|що я знаю|що в мене є|які (?:в мене|у мене)|пошукай|де (?:в мене|у мене))\\b/i.test(lower)\n);\nconst query = normalizedText\n  .replace(/^\\/(search|find)(?:@\\w+)?\\s*/i, '')\n  .trim();\nconst captureText = normalizedText\n  .replace(/^\\/(save|inbox)(?:@\\w+)?\\s*/i, '')\n  .trim();\nconst supported = normalizedText.length > 0;\n\nreturn [{\n  json: {\n    telegram_user_id: String(message.from?.id || ''),\n    source_message_id: String(message.message_id || ''),\n    source_chat_id: String(message.chat?.id || ''),\n    content_type: urls.length > 0 ? 'link' : 'text',\n    raw_text: rawText,\n    normalized_text: forceCapture ? captureText : normalizedText,\n    source_url: urls[0] || null,\n    supported,\n    intent: searchIntent ? 'search' : 'capture',\n    query,\n    raw_payload: input\n  }\n}];"
+        "jsCode": "const input = $json;\nconst message = input.message || {};\nconst rawText = String(message.text || message.caption || '');\nconst normalizedText = rawText.trim().replace(/\\s+/g, ' ');\nconst lower = normalizedText.toLocaleLowerCase('uk-UA');\nconst urls = normalizedText.match(/https?:\\/\\/[^\\s]+/gi) || [];\nconst photo = Array.isArray(message.photo) ? message.photo.at(-1) : null;\nconst voice = message.voice || null;\nconst document = message.document || null;\nconst mediaKind = voice ? 'voice' : photo ? 'photo' : document ? 'document' : null;\nconst file = voice || photo || document || {};\nconst mimeType = String(file.mime_type || (photo ? 'image/jpeg' : ''));\nconst blockedDocument = document && /(?:zip|x-rar|x-7z|octet-stream)/i.test(mimeType);\nconst forceCapture = /^\\/(save|inbox)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText);\nconst searchIntent = !mediaKind && !forceCapture && (\n  /^\\/(search|find)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText) ||\n  /^(знайди|знайдіть|покажи|покажіть|що я знаю|що в мене є|які (?:в мене|у мене)|пошукай|де (?:в мене|у мене))\\b/i.test(lower)\n);\nconst query = normalizedText.replace(/^\\/(search|find)(?:@\\w+)?\\s*/i, '').trim();\nconst captureText = normalizedText.replace(/^\\/(save|inbox)(?:@\\w+)?\\s*/i, '').trim();\nconst supported = mediaKind ? !blockedDocument : normalizedText.length > 0;\n\nreturn [{ json: {\n  telegram_user_id: String(message.from?.id || ''),\n  source_message_id: String(message.message_id || ''),\n  source_chat_id: String(message.chat?.id || ''),\n  content_type: voice ? 'voice' : photo ? 'photo' : document ? 'file' : urls.length > 0 ? 'link' : 'text',\n  raw_text: rawText,\n  normalized_text: forceCapture ? captureText : normalizedText,\n  source_url: urls[0] || null,\n  supported,\n  intent: searchIntent ? 'search' : 'capture',\n  query,\n  media_kind: mediaKind,\n  file_id: String(file.file_id || ''),\n  file_unique_id: String(file.file_unique_id || ''),\n  file_name: String(document?.file_name || (voice ? `voice-${message.message_id}.ogg` : photo ? `photo-${message.message_id}.jpg` : '')),\n  mime_type: mimeType,\n  file_size: Number(file.file_size || 0),\n  raw_payload: input\n} }];"
       },
       "id": "6659bb9c-3804-47e1-935b-75b5c1f7a288",
       "name": "Normalize Telegram Input",
@@ -40,7 +40,7 @@
     },
     {
       "parameters": {
-        "jsCode": "if ($json.intent === 'search') return [];\nreturn [{ json: $json }];"
+        "jsCode": "if ($json.intent === 'search' || $json.media_kind) return [];\nreturn [{ json: $json }];"
       },
       "id": "b236ef97-93f9-430b-b930-c8235c990478",
       "name": "Pass Capture Requests",
@@ -57,6 +57,130 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [-300, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.media_kind || !$json.file_id || !$json.supported) return [];\nreturn [{ json: $json }];"
+      },
+      "id": "fdbd1cae-d456-48d6-a5a5-f6beebd450cd",
+      "name": "Pass Media Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 420]
+    },
+    {
+      "parameters": {"jsCode": "return $json.media_kind === 'voice' ? [{ json: $json }] : [];"},
+      "id": "57ac4930-1532-420a-842d-3fc80e4ffae0",
+      "name": "Filter Voice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, 340]
+    },
+    {
+      "parameters": {"jsCode": "return $json.media_kind === 'photo' ? [{ json: $json }] : [];"},
+      "id": "ff0df9fd-87dd-4ba5-a45a-cb6c8d22ef9d",
+      "name": "Filter Photo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, 460]
+    },
+    {
+      "parameters": {"jsCode": "return $json.media_kind === 'document' ? [{ json: $json }] : [];"},
+      "id": "f337f7e3-9fa2-4d79-bbb7-63f5d6f3cb55",
+      "name": "Filter Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, 580]
+    },
+    {
+      "parameters": {"resource": "file", "operation": "get", "fileId": "={{ $json.file_id }}", "download": true, "additionalFields": {"mimeType": "audio/ogg"}},
+      "id": "e3d89f12-b37f-4921-be85-cd493684d3d3",
+      "name": "Download Voice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [180, 340],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {"resource": "file", "operation": "get", "fileId": "={{ $json.file_id }}", "download": true, "additionalFields": {"mimeType": "image/jpeg"}},
+      "id": "f041bce2-3f70-4411-96ef-8e28da7718f4",
+      "name": "Download Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [180, 460],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {"resource": "file", "operation": "get", "fileId": "={{ $json.file_id }}", "download": true, "additionalFields": {"mimeType": "={{ $json.mime_type }}"}},
+      "id": "2dbad410-b92a-4db6-bc47-54efc7aab478",
+      "name": "Download Document",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [180, 580],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "modelId": {"__rl": true, "value": "models/gemini-3.1-flash-lite", "mode": "id"},
+        "inputType": "binary",
+        "binaryPropertyName": "data",
+        "simplify": true,
+        "options": {}
+      },
+      "id": "71681bd4-780e-4892-aed3-578b820ab247",
+      "name": "Transcribe Voice with Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [430, 340],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {"__rl": true, "value": "models/gemini-3.1-flash-lite", "mode": "id"},
+        "text": "Витягни весь видимий текст (OCR) і стисло опиши зміст зображення українською. Поверни лише корисний текст для бази знань.",
+        "inputType": "binary",
+        "binaryPropertyName": "data",
+        "simplify": true,
+        "options": {"maxOutputTokens": 2048}
+      },
+      "id": "bcb57cf6-3980-4118-8504-2a8ceefb080a",
+      "name": "Analyze Photo with Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [430, 460],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "analyze",
+        "modelId": {"__rl": true, "value": "models/gemini-3.1-flash-lite", "mode": "id"},
+        "text": "Витягни та структуровано передай основний текст документа. Не вигадуй даних. Поверни лише зміст, придатний для пошуку в базі знань.",
+        "inputType": "binary",
+        "binaryPropertyName": "data",
+        "simplify": true,
+        "options": {"maxOutputTokens": 8192}
+      },
+      "id": "77597e52-1762-4032-a038-b50063e6673c",
+      "name": "Analyze Document with Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [430, 580],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst parts = $json.content?.parts || $json.candidate?.content?.parts || [];\nconst extracted = parts.map((part) => part.text || '').filter(Boolean).join('\\n').trim()\n  || String($json.text || $json.output || '').trim();\nconst caption = String(original.normalized_text || '').trim();\nconst normalized = [caption, extracted].filter(Boolean).join('\\n\\n').trim();\nreturn [{ json: {\n  ...original,\n  raw_text: caption || extracted,\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: { ...original.raw_payload, extraction: { provider: 'gemini', media_kind: original.media_kind } }\n} }];"
+      },
+      "id": "3eddd35d-c6bf-4e3b-935b-e7e030099dec",
+      "name": "Normalize Extracted Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 460]
     },
     {
       "parameters": {
@@ -88,7 +212,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const row = $json;\nlet reply;\n\nif (!row.authorized) {\n  reply = '⛔ Доступ до Inbox Agent не дозволено.';\n} else if (!row.supported) {\n  reply = 'Поки що я приймаю текст і посилання. Голос, фото та файли додамо наступним етапом.';\n} else if (row.created) {\n  const kind = row.content_type === 'link' ? 'посилання' : 'текст';\n  reply = `📥 Збережено ${kind} у Inbox.\\n\\n${row.preview}`;\n} else {\n  reply = `♻️ Цей матеріал уже є в Inbox.\\n\\n${row.preview}`;\n}\n\nreturn [{ json: { chat_id: row.source_chat_id, reply, item_id: row.item_id || null } }];"
+        "jsCode": "const row = $json;\nlet reply;\n\nif (!row.authorized) {\n  reply = '⛔ Доступ до Inbox Agent не дозволено.';\n} else if (!row.supported) {\n  reply = 'Не вдалося витягти зміст. Підтримуються текст, посилання, голос, фото, PDF та поширені документи; архіви додамо окремо.';\n} else if (row.created) {\n  const labels = { link: 'посилання', text: 'текст', voice: 'голос', photo: 'зображення', file: 'файл' };\n  const kind = labels[row.content_type] || 'матеріал';\n  reply = `📥 Збережено ${kind} у Inbox.\\n\\n${row.preview}`;\n} else {\n  reply = `♻️ Цей матеріал уже є в Inbox.\\n\\n${row.preview}`;\n}\n\nreturn [{ json: { chat_id: row.source_chat_id, reply, item_id: row.item_id || null } }];"
       },
       "id": "d97da128-e4a5-49e2-ae34-dba6c0cd71cd",
       "name": "Prepare Confirmation",
@@ -198,6 +322,35 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
       "position": [-40, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\nif (!row.created || !['voice', 'photo', 'file'].includes(row.content_type)) return [];\nconst media = $('Normalize Extracted Media').first().json;\nreturn [{ json: {\n  inbox_item_id: row.item_id,\n  kind: media.media_kind === 'document' ? 'document' : media.media_kind,\n  original_name: media.file_name,\n  mime_type: media.mime_type,\n  size_bytes: media.file_size,\n  telegram_file_id: media.file_id,\n  file_unique_id: media.file_unique_id\n} }];"
+      },
+      "id": "1d8704a3-e8e7-4b9b-a2ca-a5673c2a78bf",
+      "name": "Queue Attachment Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [100, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO inbox.attachments (inbox_item_id, kind, original_name, mime_type, size_bytes, telegram_file_id, metadata)\nVALUES ($1::uuid, $2::text, nullif($3::text, ''), nullif($4::text, ''), nullif($5::bigint, 0), nullif($6::text, ''), jsonb_build_object('telegram_file_unique_id', $7::text, 'storage', 'telegram'))\nRETURNING id::text AS attachment_id, inbox_item_id::text AS inbox_item_id, kind;",
+        "options": {
+          "queryReplacement": "={{ [ $json.inbox_item_id, $json.kind, $json.original_name || '', $json.mime_type || '', $json.size_bytes || 0, $json.telegram_file_id || '', $json.file_unique_id || '' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "cdf0c5e2-6970-4092-b526-5e35fa4ce193",
+      "name": "Persist Attachment Metadata",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [380, 320],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
     }
   ],
   "connections": {
@@ -211,7 +364,8 @@
     "Normalize Telegram Input": {
       "main": [[
         {"node": "Pass Capture Requests", "type": "main", "index": 0},
-        {"node": "Pass Search Requests", "type": "main", "index": 0}
+        {"node": "Pass Search Requests", "type": "main", "index": 0},
+        {"node": "Pass Media Requests", "type": "main", "index": 0}
       ]]
     },
     "Pass Capture Requests": {
@@ -219,6 +373,25 @@
     },
     "Pass Search Requests": {
       "main": [[{"node": "Start Hybrid Search", "type": "main", "index": 0}]]
+    },
+    "Pass Media Requests": {
+      "main": [[
+        {"node": "Filter Voice", "type": "main", "index": 0},
+        {"node": "Filter Photo", "type": "main", "index": 0},
+        {"node": "Filter Document", "type": "main", "index": 0}
+      ]]
+    },
+    "Filter Voice": {"main": [[{"node": "Download Voice", "type": "main", "index": 0}]]},
+    "Filter Photo": {"main": [[{"node": "Download Photo", "type": "main", "index": 0}]]},
+    "Filter Document": {"main": [[{"node": "Download Document", "type": "main", "index": 0}]]},
+    "Download Voice": {"main": [[{"node": "Transcribe Voice with Gemini", "type": "main", "index": 0}]]},
+    "Download Photo": {"main": [[{"node": "Analyze Photo with Gemini", "type": "main", "index": 0}]]},
+    "Download Document": {"main": [[{"node": "Analyze Document with Gemini", "type": "main", "index": 0}]]},
+    "Transcribe Voice with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
+    "Analyze Photo with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
+    "Analyze Document with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
+    "Normalize Extracted Media": {
+      "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
     },
     "Authorize and Save Inbox Item": {
       "main": [[
@@ -229,6 +402,11 @@
         },
         {
           "node": "Queue New Item for Classification",
+          "type": "main",
+          "index": 0
+        },
+        {
+          "node": "Queue Attachment Metadata",
           "type": "main",
           "index": 0
         }
@@ -247,6 +425,9 @@
         "type": "main",
         "index": 0
       }]]
+    },
+    "Queue Attachment Metadata": {
+      "main": [[{"node": "Persist Attachment Metadata", "type": "main", "index": 0}]]
     }
   },
   "active": false,
