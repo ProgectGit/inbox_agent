@@ -70,6 +70,63 @@
     },
     {
       "parameters": {
+        "jsCode": "const youtubeHosts = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be'];\nreturn youtubeHosts.includes(String($json.web_host || '').toLowerCase()) ? [{ json: $json }] : [];"
+      },
+      "id": "73d52ff8-8e2d-48e2-bd65-3d1964410cc2",
+      "name": "Filter YouTube Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [170, -340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const youtubeHosts = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be'];\nreturn youtubeHosts.includes(String($json.web_host || '').toLowerCase()) ? [] : [{ json: $json }];"
+      },
+      "id": "979a7c96-fc71-49a1-91ca-2b8f96347e54",
+      "name": "Filter Regular Web Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [170, -180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://youtube-reader:8080/extract",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { url: $json.source_url } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "f1ed62db-b22e-45a2-9428-cf5aa64d5c3c",
+      "name": "Read YouTube Metadata and Captions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [430, -340],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Validate Web URL').first().json;\nconst result = $json || {};\nconst duration = Number(result.duration || 0);\nconst durationText = duration ? `${Math.floor(duration / 3600)}:${String(Math.floor((duration % 3600) / 60)).padStart(2, '0')}:${String(duration % 60).padStart(2, '0')}` : '';\nconst chapters = Array.isArray(result.chapters) ? result.chapters.map((chapter) => {\n  const seconds = Number(chapter.start_time || 0);\n  const stamp = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;\n  return `${stamp} ${chapter.title || ''}`.trim();\n}).filter(Boolean).join('\\n') : '';\nconst parts = [\n  result.title ? `Назва: ${result.title}` : '',\n  result.channel ? `Канал: ${result.channel}` : '',\n  result.upload_date ? `Дата публікації: ${String(result.upload_date).replace(/^(\\d{4})(\\d{2})(\\d{2})$/, '$1-$2-$3')}` : '',\n  durationText ? `Тривалість: ${durationText}` : '',\n  result.description ? `Опис:\\n${result.description}` : '',\n  chapters ? `Розділи:\\n${chapters}` : '',\n  result.transcript ? `Транскрипт (${result.language || 'unknown'}, ${result.subtitle_type || 'captions'}):\\n${result.transcript}` : ''\n].filter(Boolean);\nconst extracted = parts.join('\\n\\n').slice(0, 120000).trim();\nconst fallback = String(original.normalized_text || original.source_url || '').trim();\nconst normalized = extracted || fallback;\nreturn [{ json: {\n  ...original,\n  raw_text: fallback,\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: {\n    ...original.raw_payload,\n    extraction: {\n      provider: 'yt-dlp',\n      complete: Boolean(result.ok),\n      video_id: result.id || null,\n      title: result.title || '',\n      channel: result.channel || '',\n      duration: duration || null,\n      language: result.language || null,\n      subtitle_type: result.subtitle_type || null,\n      transcript_characters: Number(result.transcript_characters || 0),\n      error: result.error || result.transcript_error || null\n    }\n  }\n} }];"
+      },
+      "id": "1b673ac3-6fa3-4e38-a9af-fe50fe1f8182",
+      "name": "Normalize YouTube Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, -340]
+    },
+    {
+      "parameters": {
         "url": "={{ $json.source_url }}",
         "sendHeaders": true,
         "headerParameters": {
@@ -492,6 +549,21 @@
       "main": [[{"node": "Validate Web URL", "type": "main", "index": 0}]]
     },
     "Validate Web URL": {
+      "main": [[
+        {"node": "Filter YouTube Link", "type": "main", "index": 0},
+        {"node": "Filter Regular Web Link", "type": "main", "index": 0}
+      ]]
+    },
+    "Filter YouTube Link": {
+      "main": [[{"node": "Read YouTube Metadata and Captions", "type": "main", "index": 0}]]
+    },
+    "Read YouTube Metadata and Captions": {
+      "main": [[{"node": "Normalize YouTube Content", "type": "main", "index": 0}]]
+    },
+    "Normalize YouTube Content": {
+      "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
+    },
+    "Filter Regular Web Link": {
       "main": [[{"node": "Download Web Page", "type": "main", "index": 0}]]
     },
     "Download Web Page": {

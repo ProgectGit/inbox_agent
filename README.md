@@ -8,6 +8,7 @@ Isolated n8n stack for the inbox agent.
 - n8n container: `inbox-agent-n8n`
 - PostgreSQL container: `inbox-agent-postgres`
 - Qdrant container: `inbox-agent-qdrant`
+- YouTube reader container: `inbox-agent-youtube-reader`
 - Server directory: `/opt/inbox-agent-n8n`
 - Public n8n endpoint: `https://inbox.mihabot.top`
 - Server-local n8n endpoint: `http://127.0.0.1:5679`
@@ -72,8 +73,14 @@ For ordinary HTTP/HTTPS links, the capture workflow downloads the page with a
 bounded timeout, removes scripts and layout chrome, extracts the title,
 description, and readable text, and stores that content instead of only the
 URL. Local, private-network, and cloud-metadata addresses are rejected before
-download. JavaScript-only pages and video transcripts require dedicated
-readers and may currently fall back to URL metadata.
+download. JavaScript-only pages may currently fall back to URL metadata.
+
+YouTube links are routed to the private `youtube-reader` service. It uses the
+pinned `yt-dlp` release to retrieve video metadata and prefers Ukrainian,
+Russian, then English manual or automatically generated captions without
+downloading the video. When captions are unavailable, the title, channel,
+description, duration, and chapters still enter the classification and RAG
+pipeline.
 
 Plain-text files (`.txt`, `.md`, `.csv`, `.json`, `.xml`) and Word `.docx`
 documents are extracted locally inside n8n; `.docx` parsing uses the bundled
