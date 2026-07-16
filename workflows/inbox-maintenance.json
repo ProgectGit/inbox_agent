@@ -104,6 +104,47 @@
       "typeVersion": 1.2,
       "position": [170, 140],
       "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH usage AS (\n  SELECT\n    thresholds.id,\n    thresholds.user_id,\n    thresholds.storage_provider,\n    thresholds.threshold_bytes,\n    thresholds.current_bytes,\n    thresholds.alerted_at,\n    COALESCE(sum(attachments.size_bytes) FILTER (WHERE attachments.upload_status = 'stored'), 0)::bigint AS used_bytes\n  FROM inbox.storage_thresholds AS thresholds\n  LEFT JOIN inbox.attachments\n    ON attachments.inbox_item_id IN (\n      SELECT items.id FROM inbox.inbox_items AS items WHERE items.user_id = thresholds.user_id\n    )\n    AND attachments.storage_provider = thresholds.storage_provider\n  WHERE thresholds.storage_provider = 'backblaze_b2'\n  GROUP BY thresholds.id\n),\ncrossed AS (\n  UPDATE inbox.storage_thresholds AS thresholds\n  SET current_bytes = usage.used_bytes,\n      alerted_at = now()\n  FROM usage\n  WHERE thresholds.id = usage.id\n    AND usage.alerted_at IS NULL\n    AND usage.current_bytes < usage.threshold_bytes\n    AND usage.used_bytes >= usage.threshold_bytes\n  RETURNING thresholds.id, thresholds.user_id, thresholds.storage_provider, thresholds.threshold_bytes, thresholds.current_bytes, thresholds.alerted_at\n),\nrefreshed AS (\n  UPDATE inbox.storage_thresholds AS thresholds\n  SET current_bytes = usage.used_bytes\n  FROM usage\n  WHERE thresholds.id = usage.id\n    AND NOT EXISTS (SELECT 1 FROM crossed WHERE crossed.id = thresholds.id)\n    AND thresholds.current_bytes IS DISTINCT FROM usage.used_bytes\n  RETURNING thresholds.id\n)\nSELECT\n  users.telegram_user_id::text AS chat_id,\n  crossed.storage_provider,\n  crossed.threshold_bytes,\n  crossed.current_bytes AS used_bytes,\n  crossed.alerted_at\nFROM crossed\nJOIN inbox.users ON users.id = crossed.user_id\nCROSS JOIN (SELECT count(*) FROM refreshed) AS refresh_done\nWHERE users.telegram_user_id IS NOT NULL;",
+        "options": {"queryBatching": "independently"}
+      },
+      "id": "d86e270b-a59c-499a-bba3-b027a25d3819",
+      "name": "Check 7 GB Storage Threshold",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [-100, 280],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.chat_id || $json.used_bytes === undefined || $json.threshold_bytes === undefined) return [];\nconst usedGb = (Number($json.used_bytes) / 1_000_000_000).toFixed(2);\nconst thresholdGb = (Number($json.threshold_bytes) / 1_000_000_000).toFixed(0);\nif (!Number.isFinite(Number($json.used_bytes)) || !Number.isFinite(Number($json.threshold_bytes))) return [];\nreturn [{ json: {\n  chat_id: $json.chat_id,\n  text: `⚠️ Сховище Inbox Agent досягло ${usedGb} GB із безплатного ліміту. Поріг ${thresholdGb} GB пройдено. Час перевірити B2, очистити дублікати або підготувати платний тариф.`\n} }];"
+      },
+      "id": "6db4a24c-fe4e-4df0-a9da-9177d04faf01",
+      "name": "Prepare Storage Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [170, 280]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "e84a39a9-289d-4241-b58f-719237ce3755",
+      "name": "Send Storage Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [430, 280],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
     }
   ],
   "connections": {
@@ -112,11 +153,14 @@
     "Recover and Inspect Queues": {"main": [[
       {"node": "Queue Analysis Retry", "type": "main", "index": 0},
       {"node": "Queue Index Retry", "type": "main", "index": 0},
-      {"node": "Prepare Failure Alert", "type": "main", "index": 0}
+      {"node": "Prepare Failure Alert", "type": "main", "index": 0},
+      {"node": "Check 7 GB Storage Threshold", "type": "main", "index": 0}
     ]]},
     "Queue Analysis Retry": {"main": [[{"node": "Retry AI Classification", "type": "main", "index": 0}]]},
     "Queue Index Retry": {"main": [[{"node": "Retry Knowledge Indexing", "type": "main", "index": 0}]]},
-    "Prepare Failure Alert": {"main": [[{"node": "Send Failure Alert", "type": "main", "index": 0}]]}
+    "Prepare Failure Alert": {"main": [[{"node": "Send Failure Alert", "type": "main", "index": 0}]]},
+    "Check 7 GB Storage Threshold": {"main": [[{"node": "Prepare Storage Alert", "type": "main", "index": 0}]]},
+    "Prepare Storage Alert": {"main": [[{"node": "Send Storage Alert", "type": "main", "index": 0}]]}
   },
   "active": false,
   "settings": {

@@ -1,0 +1,95 @@
+{
+  "id": "InboxObjectStorageUpload01",
+  "name": "Inbox — Backblaze B2 Original Upload",
+  "nodes": [
+    {
+      "parameters": {"inputSource": "passthrough"},
+      "id": "3fb4472b-157a-493b-8b08-06860bca1a18",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-620, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH candidate AS (\n  SELECT attachments.id\n  FROM inbox.attachments\n  WHERE attachments.telegram_file_id IS NOT NULL\n    AND attachments.upload_status IN ('metadata_only', 'pending', 'failed')\n    AND ($1::text = '' OR attachments.id = $1::uuid)\n  ORDER BY attachments.created_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED\n),\nclaimed AS (\n  UPDATE inbox.attachments AS attachments\n  SET upload_status = 'uploading',\n      storage_provider = 'backblaze_b2',\n      storage_bucket = $2::text,\n      storage_error = NULL\n  FROM candidate\n  WHERE attachments.id = candidate.id\n  RETURNING attachments.*\n)\nSELECT\n  claimed.id::text AS attachment_id,\n  claimed.inbox_item_id::text AS inbox_item_id,\n  items.user_id::text AS user_id,\n  claimed.telegram_file_id,\n  claimed.original_name,\n  claimed.mime_type,\n  claimed.size_bytes,\n  claimed.storage_bucket,\n  concat(\n    'users/', items.user_id::text, '/',\n    to_char(claimed.created_at, 'YYYY/MM'), '/',\n    claimed.id::text, '/',\n    regexp_replace(COALESCE(claimed.original_name, claimed.id::text), '[^a-zA-Z0-9._-]+', '_', 'g')\n  ) AS object_key\nFROM claimed\nJOIN inbox.inbox_items AS items ON items.id = claimed.inbox_item_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.attachment_id || '', $json.storage_bucket || 'inbox-agent-files' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "e65bfdab-1600-4354-9ddf-c7334a819f2f",
+      "name": "Claim Pending Attachment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-370, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $json.telegram_file_id }}",
+        "download": true,
+        "additionalFields": {"mimeType": "={{ $json.mime_type }}"}
+      },
+      "id": "761d2b51-228a-419e-99b0-0054e6ca6daa",
+      "name": "Download Original from Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-110, 0],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "={{ $('Claim Pending Attachment').item.json.storage_bucket }}",
+        "fileName": "={{ $('Claim Pending Attachment').item.json.object_key }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {"acl": "private"}
+      },
+      "id": "f6881729-fe4c-4451-b4c7-5d0dce64db6a",
+      "name": "Upload Original to B2",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [150, 0],
+      "credentials": {"s3": {"id": "REPLACE_WITH_B2_CREDENTIAL_ID", "name": "Backblaze B2 Inbox Storage"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbox.attachments\nSET upload_status = 'stored',\n    storage_provider = 'backblaze_b2',\n    storage_bucket = $2::text,\n    object_key = $3::text,\n    storage_class = 'STANDARD',\n    uploaded_at = now(),\n    encryption = 'provider-managed',\n    storage_error = NULL\nWHERE id = $1::uuid\nRETURNING id::text AS attachment_id, storage_provider, storage_bucket, object_key, upload_status, uploaded_at;",
+        "options": {
+          "queryReplacement": "={{ [ $('Claim Pending Attachment').item.json.attachment_id, $('Claim Pending Attachment').item.json.storage_bucket, $('Claim Pending Attachment').item.json.object_key ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "85392972-c87e-470b-a111-d061dcbe3b6b",
+      "name": "Mark Original Stored",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [410, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
+    "Claim Pending Attachment": {"main": [[{"node": "Download Original from Telegram", "type": "main", "index": 0}]]},
+    "Download Original from Telegram": {"main": [[{"node": "Upload Original to B2", "type": "main", "index": 0}]]},
+    "Upload Original to B2": {"main": [[{"node": "Mark Original Stored", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "239ba4d1-cf31-443d-9d7b-521907a799f9",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}
