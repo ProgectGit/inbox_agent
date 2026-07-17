@@ -44,7 +44,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH target AS (\n  UPDATE inbox.inbox_items\n  SET status = 'analyzing',\n      error_code = NULL,\n      error_message = NULL\n  WHERE id = $1::uuid\n    AND status IN ('received', 'analyzing', 'failed', 'needs_review')\n  RETURNING *\n)\nSELECT\n  target.id::text AS item_id,\n  target.user_id::text AS user_id,\n  target.content_type,\n  target.normalized_text,\n  target.source_url,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.categories WHERE is_active) AS categories,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.projects WHERE is_active) AS projects,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.item_types WHERE is_active) AS item_types,\n  (SELECT jsonb_agg(name ORDER BY rank) FROM inbox.priorities) AS priorities\nFROM target;",
+        "query": "WITH target AS (\n  UPDATE inbox.inbox_items\n  SET status = 'analyzing',\n      error_code = NULL,\n      error_message = NULL\n  WHERE id = $1::uuid\n    AND status IN ('received', 'analyzing', 'failed', 'needs_review')\n  RETURNING *\n)\nSELECT\n  target.id::text AS item_id,\n  target.user_id::text AS user_id,\n  target.content_type,\n  target.normalized_text,\n  target.source_url,\n  target.source_chat_id AS chat_id,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.categories WHERE is_active) AS categories,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.projects WHERE is_active) AS projects,\n  (SELECT jsonb_agg(name ORDER BY name) FROM inbox.item_types WHERE is_active) AS item_types,\n  (SELECT jsonb_agg(name ORDER BY rank) FROM inbox.priorities) AS priorities\nFROM target;",
         "options": {
           "queryReplacement": "={{ [ $json.item_id ] }}",
           "queryBatching": "independently"
@@ -153,32 +153,38 @@
     },
     {
       "parameters": {
-        "operation": "call_workflow",
-        "source": "database",
-        "workflowId": {
-          "__rl": true,
-          "value": "InboxKnowledgeIndexing01",
-          "mode": "list",
-          "cachedResultName": "Inbox — Knowledge Indexing"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {},
-          "matchingColumns": [],
-          "schema": [],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": true
-        },
-        "mode": "each",
-        "options": {
-          "waitForSubWorkflow": false
+        "jsCode": "const analysis = $('Validate Classification').item.json;\nconst source = $('Load Inbox Item').item.json;\nif (!source.chat_id) return [];\nconst points = (analysis.key_points || []).slice(0, 8);\nconst actions = (analysis.next_actions || []).slice(0, 3);\nconst sections = [\n  `✅ Аналіз завершено\\n\\n🧠 ${analysis.title}`,\n  analysis.summary,\n  `📁 Проєкт: ${analysis.project}\\n🏷 Категорія: ${analysis.category}\\n📌 Тип: ${analysis.item_type}\\n⚡ Пріоритет: ${analysis.priority}\\n🌐 Мова джерела: ${analysis.language}`,\n  points.length ? `🔑 Ключові моменти:\\n${points.map((point) => `• ${point}`).join('\\n')}` : '',\n  actions.length ? `➡️ Наступні дії:\\n${actions.map((action) => `• ${action}`).join('\\n')}` : '',\n  $json.indexing_enqueued ? '🧩 RAG: додано до послідовної черги індексації.' : '🧩 RAG: матеріал уже стоїть у черзі або проіндексований.',\n  analysis.source_url ? `🔗 ${analysis.source_url}` : ''\n].filter(Boolean);\nreturn [{ json: { chat_id: source.chat_id, reply: sections.join('\\n\\n').slice(0, 4000) } }];"
+      },
+      "id": "93d86079-6c4b-45bf-a2da-111930c8790d",
+      "name": "Prepare Analysis Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
         }
       },
-      "id": "58989c70-8403-4503-befa-f449128f8a1b",
-      "name": "Start Knowledge Indexing",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.3,
-      "position": [750, 0]
+      "id": "a0fb81f8-ef24-432a-8e4c-375ecf2698e3",
+      "name": "Send Analysis Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 3000,
+      "position": [1000, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "iIA8c9213PIlR1Zm",
+          "name": "Telegram account"
+        }
+      }
     }
   ],
   "connections": {
@@ -210,7 +216,10 @@
       "main": [[{"node": "Persist Knowledge Item", "type": "main", "index": 0}]]
     },
     "Persist Knowledge Item": {
-      "main": [[{"node": "Start Knowledge Indexing", "type": "main", "index": 0}]]
+      "main": [[{"node": "Prepare Analysis Reply", "type": "main", "index": 0}]]
+    },
+    "Prepare Analysis Reply": {
+      "main": [[{"node": "Send Analysis Reply", "type": "main", "index": 0}]]
     }
   },
   "active": false,

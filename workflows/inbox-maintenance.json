@@ -3,9 +3,9 @@
   "name": "Inbox — Recovery and Monitoring",
   "nodes": [
     {
-      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 5}]}},
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 1}]}},
       "id": "390c6072-f8f9-478d-8284-acde2b92a558",
-      "name": "Every 5 Minutes",
+      "name": "Every Minute",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [-620, -80]
@@ -148,7 +148,7 @@
     }
   ],
   "connections": {
-    "Every 5 Minutes": {"main": [[{"node": "Recover and Inspect Queues", "type": "main", "index": 0}]]},
+    "Every Minute": {"main": [[{"node": "Recover and Inspect Queues", "type": "main", "index": 0}]]},
     "Manual Recovery Test": {"main": [[{"node": "Recover and Inspect Queues", "type": "main", "index": 0}]]},
     "Recover and Inspect Queues": {"main": [[
       {"node": "Queue Analysis Retry", "type": "main", "index": 0},
