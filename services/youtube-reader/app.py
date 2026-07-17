@@ -1,9 +1,9 @@
 import html
 import json
 import re
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 import yt_dlp
 
@@ -27,10 +27,18 @@ def is_youtube_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and (parsed.hostname or "").lower() in YOUTUBE_HOSTS
 
 
-def choose_language(tracks: dict):
+def choose_language(tracks: dict, preferred=None, prefer_original=False):
     if not tracks:
         return None, []
     keys = list(tracks.keys())
+    if preferred:
+        for wanted in (f"{preferred}-orig", preferred):
+            if wanted in tracks:
+                return wanted, tracks[wanted]
+    if prefer_original:
+        original = next((key for key in keys if key.lower().endswith("-orig")), None)
+        if original:
+            return original, tracks[original]
     for wanted in ("uk", "uk-orig", "ru", "ru-orig", "en", "en-orig"):
         if wanted in tracks:
             return wanted, tracks[wanted]
@@ -42,12 +50,10 @@ def choose_language(tracks: dict):
     return key, tracks[key]
 
 
-def choose_track(formats: list):
-    for extension in ("json3", "vtt", "srv3", "srv2", "srv1"):
-        track = next((item for item in formats if item.get("ext") == extension and item.get("url")), None)
-        if track:
-            return track
-    return next((item for item in formats if item.get("url")), None)
+def choose_tracks(formats: list):
+    priorities = {"json3": 0, "vtt": 1, "srv3": 2, "srv2": 3, "srv1": 4}
+    tracks = [item for item in formats if item.get("url")]
+    return sorted(tracks, key=lambda item: priorities.get(item.get("ext"), 99))
 
 
 def clean_lines(lines: list[str]) -> str:
@@ -85,13 +91,12 @@ def parse_vtt(raw: bytes) -> str:
     return clean_lines(lines)
 
 
-def download_transcript(track: dict) -> str:
-    request = Request(
-        track["url"],
-        headers={"User-Agent": "Mozilla/5.0 (compatible; InboxAgent/1.0)"},
-    )
-    with urlopen(request, timeout=20) as response:
+def download_transcript(track: dict, ydl) -> str:
+    response = ydl.urlopen(track["url"])
+    try:
         raw = response.read(4 * 1024 * 1024)
+    finally:
+        response.close()
     return parse_json3(raw) if track.get("ext") == "json3" else parse_vtt(raw)
 
 
@@ -108,20 +113,33 @@ def extract_youtube(url: str) -> dict:
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    language, formats = choose_language(info.get("subtitles") or {})
-    subtitle_type = "manual"
-    if not formats:
-        language, formats = choose_language(info.get("automatic_captions") or {})
-        subtitle_type = "automatic"
+        source_language = info.get("language")
+        language, formats = choose_language(
+            info.get("subtitles") or {}, preferred=source_language
+        )
+        subtitle_type = "manual"
+        if not formats:
+            language, formats = choose_language(
+                info.get("automatic_captions") or {},
+                preferred=source_language,
+                prefer_original=True,
+            )
+            subtitle_type = "automatic"
 
-    transcript = ""
-    transcript_error = None
-    track = choose_track(formats)
-    if track:
-        try:
-            transcript = download_transcript(track)
-        except Exception as exc:  # Metadata is still useful if captions fail.
-            transcript_error = str(exc)[:500]
+        transcript = ""
+        transcript_errors = []
+        tracks = choose_tracks(formats)
+        for attempt, track in enumerate(tracks[:4]):
+            try:
+                transcript = download_transcript(track, ydl)
+                if transcript:
+                    break
+            except Exception as exc:  # Metadata is still useful if captions fail.
+                transcript_errors.append(str(exc)[:500])
+                if attempt < min(len(tracks), 4) - 1:
+                    time.sleep(1.5)
+
+    transcript_error = transcript_errors[-1] if transcript_errors and not transcript else None
 
     return {
         "ok": True,
@@ -137,7 +155,7 @@ def extract_youtube(url: str) -> dict:
         "tags": (info.get("tags") or [])[:50],
         "chapters": (info.get("chapters") or [])[:200],
         "language": language,
-        "subtitle_type": subtitle_type if track else None,
+        "subtitle_type": subtitle_type if tracks else None,
         "transcript": transcript,
         "transcript_characters": len(transcript),
         "transcript_error": transcript_error,
