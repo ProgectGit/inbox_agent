@@ -70,6 +70,10 @@ data for diagnosis, and does not store successful runs of the two one-minute
 maintenance workflows. These limits affect operational history only; they do
 not delete PostgreSQL knowledge, Qdrant vectors, or Backblaze originals.
 
+The `disk-monitor` container checks the host filesystem every five minutes and
+writes a warning to its rotated Docker log when usage crosses 80%. It sends no
+Telegram messages and writes a recovery line after usage falls below the limit.
+
 The current server limits production concurrency to two executions. After a
 server migration, increase `N8N_CONCURRENCY_PRODUCTION_LIMIT` in `.env` to match
 the available RAM; storage volumes and all guardrail settings remain portable.
@@ -83,9 +87,22 @@ upload. Failed uploads retry every five minutes. Remote dumps older than 30 days
 are deleted after a successful upload. Backup failures are written to rotated
 Docker logs and intentionally do not send Telegram messages.
 
-The backup container is stateless. On a replacement server, restore the newest
-dump, move the n8n and Qdrant volumes, copy `.env`, and start the same Compose
-project.
+The `config-backup` sidecar encrypts `.env`, `.backup.env`, Compose, and the
+nginx virtual host with an Age public key before uploading the bundle to
+`backups/config/`. Only the matching private recovery key can decrypt credentials
+and `N8N_ENCRYPTION_KEY`; that private key must remain off the server.
+
+Recovery helpers live in `scripts/recovery/`:
+
+- `restore-config.sh` decrypts a recovery bundle into a new directory.
+- `test-postgres-restore.sh` validates a dump in a disposable PostgreSQL
+  container without touching production.
+- `restore-postgres.sh` performs an explicitly confirmed production restore.
+- `migrate-to-server.sh` installs the recovered config and database on a new
+  server, rebuilds the stack, validates nginx, and starts the services.
+
+Qdrant remains rebuildable from PostgreSQL, so a server migration does not
+depend on copying its volume.
 
 ### Telegram usage
 

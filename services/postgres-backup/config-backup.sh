@@ -1,10 +1,15 @@
 #!/bin/sh
 set -eu
 
-interval_seconds="${BACKUP_INTERVAL_SECONDS:-86400}"
+interval_seconds="${CONFIG_BACKUP_INTERVAL_SECONDS:-86400}"
 retention_days="${BACKUP_RETENTION_DAYS:-30}"
-backup_prefix="${BACKUP_PREFIX:-backups/postgresql}"
+backup_prefix="${CONFIG_BACKUP_PREFIX:-backups/config}"
 retry_seconds="${BACKUP_RETRY_SECONDS:-300}"
+
+if [ -z "${RECOVERY_AGE_RECIPIENT:-}" ]; then
+  echo "RECOVERY_AGE_RECIPIENT is required" >&2
+  exit 1
+fi
 
 export RCLONE_CONFIG_B2_TYPE=s3
 export RCLONE_CONFIG_B2_PROVIDER=Other
@@ -15,15 +20,15 @@ export RCLONE_CONFIG_B2_REGION="${B2_REGION}"
 export RCLONE_CONFIG_B2_NO_CHECK_BUCKET=true
 
 if [ "${1:-}" = "download-latest" ]; then
-  destination="${2:-/tmp/inbox-agent-latest.dump}"
+  destination="${2:-/tmp/inbox-agent-config-latest.tar.gz.age}"
   latest_file="$(
     rclone lsf "b2:${B2_BUCKET}/${backup_prefix}" \
       --files-only \
-      --include "inbox-agent-*.dump" \
+      --include "inbox-agent-config-*.tar.gz.age" \
       --s3-no-check-bucket | sort | tail -n 1
   )"
   if [ -z "${latest_file}" ]; then
-    echo "No PostgreSQL backup found" >&2
+    echo "No encrypted recovery bundle found" >&2
     exit 1
   fi
   rclone copyto \
@@ -33,42 +38,43 @@ if [ "${1:-}" = "download-latest" ]; then
     --contimeout 15s \
     --timeout 5m \
     --retries 3
-  echo "Latest PostgreSQL backup downloaded to ${destination}"
+  echo "Latest recovery bundle downloaded to ${destination}"
   exit 0
 fi
 
-backup_once() {
-  rm -f /tmp/inbox-agent-*.dump
+backup_config_once() {
+  rm -f /tmp/inbox-agent-config-*.tar.gz.age
   timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
-  filename="inbox-agent-${timestamp}.dump"
+  filename="inbox-agent-config-${timestamp}.tar.gz.age"
   local_path="/tmp/${filename}"
   remote_path="b2:${B2_BUCKET}/${backup_prefix}/${filename}"
 
-  rm -f "${local_path}"
-  echo "Creating PostgreSQL backup ${filename}"
-  pg_dump --format=custom --compress=6 --no-owner --no-acl --file="${local_path}"
+  echo "Creating encrypted recovery bundle ${filename}"
+  tar -C /recovery -czf - . | age --encrypt \
+    --recipient "${RECOVERY_AGE_RECIPIENT}" \
+    --output "${local_path}"
 
-  echo "Uploading ${filename} to private object storage"
+  echo "Uploading encrypted recovery bundle"
   rclone copyto "${local_path}" "${remote_path}" \
     --s3-no-check-bucket \
     --contimeout 15s \
     --timeout 5m \
     --retries 3
   rm -f "${local_path}"
-  date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/last-backup-success
-  echo "Backup ${filename} uploaded successfully"
+  date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/last-config-backup-success
+  echo "Encrypted recovery bundle uploaded successfully"
 
   if ! rclone delete "b2:${B2_BUCKET}/${backup_prefix}" \
     --min-age "${retention_days}d" \
-    --include "inbox-agent-*.dump" \
+    --include "inbox-agent-config-*.tar.gz.age" \
     --s3-no-check-bucket; then
-    echo "Warning: remote retention cleanup failed; backup upload is still valid" >&2
+    echo "Warning: recovery bundle retention cleanup failed" >&2
   fi
 }
 
 while true; do
-  until backup_once; do
-    echo "Backup failed; retrying in ${retry_seconds} seconds" >&2
+  until backup_config_once; do
+    echo "Config backup failed; retrying in ${retry_seconds} seconds" >&2
     sleep "${retry_seconds}"
   done
   sleep "${interval_seconds}"

@@ -67,6 +67,7 @@ services:
       - inbox_agent_internal
 
   postgres-backup:
+    image: inbox-agent-backup:latest
     build:
       context: ./services/postgres-backup
     container_name: inbox-agent-postgres-backup
@@ -88,6 +89,37 @@ services:
       BACKUP_PREFIX: ${BACKUP_PREFIX:-backups/postgresql}
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/last-backup-success"]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    logging: *default-logging
+    networks:
+      - inbox_agent_internal
+
+  config-backup:
+    image: inbox-agent-backup:latest
+    container_name: inbox-agent-config-backup
+    restart: unless-stopped
+    depends_on:
+      postgres-backup:
+        condition: service_healthy
+    env_file:
+      - path: .backup.env
+        required: false
+    environment:
+      RECOVERY_AGE_RECIPIENT: ${RECOVERY_AGE_RECIPIENT:-}
+      CONFIG_BACKUP_INTERVAL_SECONDS: ${CONFIG_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      CONFIG_BACKUP_PREFIX: ${CONFIG_BACKUP_PREFIX:-backups/config}
+    entrypoint: ["/usr/local/bin/inbox-config-backup"]
+    volumes:
+      - ./.env:/recovery/inbox-agent/.env:ro
+      - ./.backup.env:/recovery/inbox-agent/.backup.env:ro
+      - ./docker-compose.yml:/recovery/inbox-agent/docker-compose.yml:ro
+      - /etc/nginx/conf.d/inbox.mihabot.top.conf:/recovery/nginx/inbox.mihabot.top.conf:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/last-config-backup-success"]
       interval: 5m
       timeout: 5s
       retries: 3
@@ -127,6 +159,25 @@ services:
     logging: *default-logging
     networks:
       - inbox_agent_internal
+
+  disk-monitor:
+    build:
+      context: ./services/disk-monitor
+    container_name: inbox-agent-disk-monitor
+    restart: unless-stopped
+    environment:
+      DISK_ALERT_PERCENT: ${DISK_ALERT_PERCENT:-80}
+      DISK_CHECK_INTERVAL_SECONDS: ${DISK_CHECK_INTERVAL_SECONDS:-300}
+    volumes:
+      - /:/host:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/last-disk-check"]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 1m
+    network_mode: none
+    logging: *default-logging
 
 volumes:
   postgres_data:
