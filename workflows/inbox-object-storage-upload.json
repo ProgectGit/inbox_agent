@@ -104,10 +104,10 @@
   "active": true,
   "settings": {
     "executionOrder": "v1",
-    "saveExecutionProgress": true,
+    "saveExecutionProgress": false,
     "saveManualExecutions": true,
     "saveDataErrorExecution": "all",
-    "saveDataSuccessExecution": "all"
+    "saveDataSuccessExecution": "none"
   },
   "versionId": "239ba4d1-cf31-443d-9d7b-521907a799f9",
   "meta": {"templateCredsSetupCompleted": false},

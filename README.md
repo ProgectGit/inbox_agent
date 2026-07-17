@@ -39,7 +39,7 @@ AI nodes:
   Gemini embeddings, and Qdrant indexing.
 - `Inbox — Hybrid Knowledge Search`: PostgreSQL lexical search plus Qdrant
   semantic search, with a grounded Gemini answer.
-- `Inbox — Recovery and Monitoring`: a five-minute watchdog that recovers stale
+- `Inbox — Recovery and Monitoring`: a one-minute watchdog that recovers stale
   work, retries analysis/indexing, stops exhausted jobs, and sends alerts.
 - `Inbox — Backblaze B2 Original Upload`: an active S3-compatible original-file
   upload workflow that processes pending attachments every minute.
@@ -61,6 +61,18 @@ All six workflows are published on the production n8n instance. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
 and must remain inactive because a Telegram bot should have only one production
 webhook entry point.
+
+## Disk guardrails
+
+Docker rotates every container log at 10 MB and retains three files. n8n prunes
+execution history after seven days or 2,000 executions, keeps failed execution
+data for diagnosis, and does not store successful runs of the two one-minute
+maintenance workflows. These limits affect operational history only; they do
+not delete PostgreSQL knowledge, Qdrant vectors, or Backblaze originals.
+
+The current server limits production concurrency to two executions. After a
+server migration, increase `N8N_CONCURRENCY_PRODUCTION_LIMIT` in `.env` to match
+the available RAM; storage volumes and all guardrail settings remain portable.
 
 ### Telegram usage
 

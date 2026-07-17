@@ -165,10 +165,10 @@
   "active": false,
   "settings": {
     "executionOrder": "v1",
-    "saveExecutionProgress": true,
+    "saveExecutionProgress": false,
     "saveManualExecutions": true,
     "saveDataErrorExecution": "all",
-    "saveDataSuccessExecution": "all"
+    "saveDataSuccessExecution": "none"
   },
   "versionId": "0d4326a4-61be-4223-bf10-9f96ff0ab464",
   "meta": {"templateCredsSetupCompleted": true},

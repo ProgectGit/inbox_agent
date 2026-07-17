@@ -1,5 +1,11 @@
 name: inbox-agent
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16
@@ -16,6 +22,7 @@ services:
       retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    logging: *default-logging
     networks:
       - inbox_agent_internal
 
@@ -43,12 +50,19 @@ services:
       WEBHOOK_URL: https://inbox.mihabot.top/
       GENERIC_TIMEZONE: Europe/Kiev
       TZ: Europe/Kiev
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-168}
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: ${EXECUTIONS_DATA_PRUNE_MAX_COUNT:-2000}
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_PROGRESS: "false"
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: ${N8N_CONCURRENCY_PRODUCTION_LIMIT:-2}
       NODE_FUNCTION_ALLOW_EXTERNAL: mammoth
       NODE_PATH: /usr/local/lib/node_modules/n8n/node_modules
     ports:
       - "127.0.0.1:5679:5678"
     volumes:
       - n8n_data:/home/node/.n8n
+    logging: *default-logging
     networks:
       - inbox_agent_internal
 
@@ -65,6 +79,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging: *default-logging
     networks:
       - inbox_agent_internal
 
@@ -79,6 +94,7 @@ services:
       - "6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    logging: *default-logging
     networks:
       - inbox_agent_internal
 
