@@ -74,6 +74,19 @@ The current server limits production concurrency to two executions. After a
 server migration, increase `N8N_CONCURRENCY_PRODUCTION_LIMIT` in `.env` to match
 the available RAM; storage volumes and all guardrail settings remain portable.
 
+## Automated backups
+
+The `postgres-backup` sidecar creates a compressed logical PostgreSQL dump on
+startup and every 24 hours, uploads it directly to the private B2 bucket under
+`backups/postgresql/`, and removes the temporary local file after a successful
+upload. Failed uploads retry every five minutes. Remote dumps older than 30 days
+are deleted after a successful upload. Backup failures are written to rotated
+Docker logs and intentionally do not send Telegram messages.
+
+The backup container is stateless. On a replacement server, restore the newest
+dump, move the n8n and Qdrant volumes, copy `.env`, and start the same Compose
+project.
+
 ### Telegram usage
 
 Send ordinary text, a link, a Telegram voice message, a photo/screenshot, or a

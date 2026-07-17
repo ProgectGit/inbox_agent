@@ -66,6 +66,36 @@ services:
     networks:
       - inbox_agent_internal
 
+  postgres-backup:
+    build:
+      context: ./services/postgres-backup
+    container_name: inbox-agent-postgres-backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .backup.env
+        required: false
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: n8n_agent
+      PGUSER: n8n_agent
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_PREFIX: ${BACKUP_PREFIX:-backups/postgresql}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/last-backup-success"]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    logging: *default-logging
+    networks:
+      - inbox_agent_internal
+
   youtube-reader:
     build:
       context: ./services/youtube-reader
