@@ -71,12 +71,31 @@ def clean_lines(lines: list[str]) -> str:
 
 def parse_json3(raw: bytes) -> str:
     payload = json.loads(raw.decode("utf-8", errors="replace"))
-    lines = []
+    groups = []
+    current_bucket = None
+    current_parts = []
+
+    def flush_group():
+        if current_bucket is None or not current_parts:
+            return
+        seconds = current_bucket * 30
+        timestamp = f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+        text = clean_lines(current_parts).replace("\n", " ")
+        if text:
+            groups.append(f"[{timestamp}] {text}")
+
     for event in payload.get("events", []):
         text = "".join(segment.get("utf8", "") for segment in event.get("segs", []))
-        if text:
-            lines.append(text)
-    return clean_lines(lines)
+        if not text.strip():
+            continue
+        bucket = max(0, int(event.get("tStartMs") or 0) // 30000)
+        if current_bucket is not None and bucket != current_bucket:
+            flush_group()
+            current_parts = []
+        current_bucket = bucket
+        current_parts.append(text)
+    flush_group()
+    return "\n".join(groups)[:MAX_TRANSCRIPT_CHARS]
 
 
 def parse_vtt(raw: bytes) -> str:
