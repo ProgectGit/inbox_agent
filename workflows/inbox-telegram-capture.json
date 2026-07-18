@@ -50,7 +50,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const text = String($json.normalized_text || '').trim();\nconst match = text.match(/^\\/(memory|recent|show|review|edit|archive|unarchive|related|merge|delete|confirm|cancel|reindex)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/i);\nif (!match || $json.media_kind) return [{ json: $json }];\nreturn [{ json: { ...$json, intent: 'manage', management_command: String(match[1] || '').toLowerCase(), management_argument: String(match[2] || '').trim() } }];"
+        "jsCode": "const text = String($json.normalized_text || '').trim();\nconst match = text.match(/^\\/(memory|recent|show|review|edit|archive|unarchive|related|duplicates|graph|file|download|merge|delete|confirm|cancel|reindex)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/i);\nif (!match || $json.media_kind) return [{ json: $json }];\nreturn [{ json: { ...$json, intent: 'manage', management_command: String(match[1] || '').toLowerCase(), management_argument: String(match[2] || '').trim() } }];"
       },
       "id": "bb892fc7-70bc-49ab-9259-4ccbbb7267f0",
       "name": "Detect Memory Command",

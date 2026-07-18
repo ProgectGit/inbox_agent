@@ -51,6 +51,9 @@ AI nodes:
 - `Inbox — Automatic Relation Builder`: runs after successful indexing,
   detects hard duplicate/reference signals, asks Gemini to judge semantic
   relations, and maintains the PostgreSQL knowledge graph.
+- `Inbox — Weekly Knowledge Digest`: sends the owner a Sunday 19:00
+  Europe/Kyiv summary of new knowledge, review work, relations, actions, and
+  B2 usage.
 
 ## Object storage
 
@@ -71,7 +74,7 @@ Stored attachments record both the object key and a complete `s3://` path.
 The watchdog sends a one-time Telegram alert only after all eight upload
 attempts have been exhausted.
 
-All eight production workflows are published on the production n8n instance.
+All nine production workflows are published on the production n8n instance.
 `Inbox — Relation Graph Backfill` is an inactive maintenance workflow for
 rebuilding relations across historical data. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
@@ -164,6 +167,9 @@ Manage stored knowledge directly from Telegram:
 /show ID             show the structured analysis and attachments
 /edit ID ...         correct taxonomy, tags, title, or summary
 /related ID          find related records with an explained score
+/graph ID            show incoming and outgoing graph relations
+/duplicates          list unresolved duplicate candidates
+/file ID             download the stored original from private B2
 /merge DUPLICATE MAIN request a safe merge into the main record
 /archive ID          archive a record without deleting it
 /unarchive ID        restore an archived record
@@ -217,6 +223,26 @@ the source in `metadata.merged_sources`; deletes the duplicate PostgreSQL item
 and its Qdrant vectors; and reindexes the combined main item. B2 objects are not
 deleted during a merge, so deduplicated originals remain available. `/cancel`
 works for pending merges as well as pending deletions.
+
+`/duplicates` combines durable `duplicate` relations with current SHA-256 and
+source-URL matches, then prints a ready-to-run `/merge DUPLICATE MAIN` command.
+`/graph ID` shows relation direction, type, score, the connected record, and the
+Ukrainian explanation.
+
+`/file ID` and `/download ID` load the private object through the n8n S3
+credential and send the binary back as a Telegram document. The database query
+deduplicates identical bucket/object keys, so a merged item with several
+attachment references sends one physical original only. Files remain private;
+no public or permanent download URL is created.
+
+## Weekly digest
+
+The digest workflow runs every Sunday at 19:00 in the `Europe/Kyiv` timezone.
+It reports the seven-day intake, total ready knowledge, review and duplicate
+queues, top projects and categories, new relation types, latest records, stored
+next actions, and B2 usage. Successful Telegram deliveries are audited in
+`inbox.digest_runs`. The manual trigger is retained for safe testing without
+changing the production schedule.
 
 Search the Second Brain with `/search ...`, `/find ...`, or natural Ukrainian
 phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`. Restrict

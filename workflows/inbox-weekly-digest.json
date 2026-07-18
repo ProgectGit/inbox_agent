@@ -1,0 +1,102 @@
+{
+  "id": "InboxWeeklyDigest01",
+  "name": "Inbox — Weekly Knowledge Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [0], "triggerAtHour": 19, "triggerAtMinute": 0}]
+        }
+      },
+      "id": "eff2fed5-cf86-47a8-8653-468a0938ff04",
+      "name": "Every Sunday Evening",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-500, -80]
+    },
+    {
+      "parameters": {},
+      "id": "5296b411-cf81-4ea2-845f-13ac086f6bda",
+      "name": "Manual Digest Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-500, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH owner AS (\n  SELECT id, telegram_chat_id FROM inbox.users WHERE role = 'owner' AND status = 'active' ORDER BY created_at LIMIT 1\n), period AS (\n  SELECT current_date - 7 AS period_start, current_date AS period_end\n), new_items AS (\n  SELECT item.id, item.received_at, knowledge.title, knowledge.summary, project.name AS project, category.name AS category\n  FROM owner\n  JOIN inbox.inbox_items item ON item.user_id = owner.id\n  LEFT JOIN inbox.knowledge_items knowledge ON knowledge.inbox_item_id = item.id\n  LEFT JOIN inbox.projects project ON project.id = knowledge.project_id\n  LEFT JOIN inbox.categories category ON category.id = knowledge.category_id\n  CROSS JOIN period\n  WHERE item.received_at >= period.period_start::timestamptz\n), review_queue AS (\n  SELECT item.id\n  FROM owner\n  JOIN inbox.inbox_items item ON item.user_id = owner.id\n  LEFT JOIN inbox.knowledge_items knowledge ON knowledge.inbox_item_id = item.id\n  LEFT JOIN inbox.projects project ON project.id = knowledge.project_id\n  LEFT JOIN inbox.categories category ON category.id = knowledge.category_id\n  WHERE coalesce(knowledge.is_archived, false) = false\n    AND (item.status <> 'ready' OR knowledge.id IS NULL OR project.name = 'Other' OR category.name = 'Other' OR item.raw_payload #>> '{extraction,complete}' = 'false')\n), top_projects AS (\n  SELECT coalesce(jsonb_agg(jsonb_build_object('name', project, 'count', count) ORDER BY count DESC, project), '[]'::jsonb) AS items\n  FROM (SELECT coalesce(project, 'Other') AS project, count(*) AS count FROM new_items GROUP BY coalesce(project, 'Other') ORDER BY count(*) DESC LIMIT 5) ranked\n), top_categories AS (\n  SELECT coalesce(jsonb_agg(jsonb_build_object('name', category, 'count', count) ORDER BY count DESC, category), '[]'::jsonb) AS items\n  FROM (SELECT coalesce(category, 'Other') AS category, count(*) AS count FROM new_items GROUP BY coalesce(category, 'Other') ORDER BY count(*) DESC LIMIT 5) ranked\n), latest_items AS (\n  SELECT coalesce(jsonb_agg(jsonb_build_object('short_id', left(id::text, 8), 'title', coalesce(title, 'Без назви'), 'project', coalesce(project, 'Other')) ORDER BY received_at DESC), '[]'::jsonb) AS items\n  FROM (SELECT * FROM new_items ORDER BY received_at DESC LIMIT 5) latest\n), relation_stats AS (\n  SELECT coalesce(jsonb_object_agg(relation_type, count), '{}'::jsonb) AS counts\n  FROM (\n    SELECT relation.relation_type, count(*) AS count\n    FROM inbox.relations relation CROSS JOIN period\n    WHERE relation.created_at >= period.period_start::timestamptz\n    GROUP BY relation.relation_type\n  ) grouped\n), actions AS (\n  SELECT coalesce(jsonb_agg(action ORDER BY created_at DESC), '[]'::jsonb) AS items\n  FROM (\n    SELECT DISTINCT action.value AS action, knowledge.created_at\n    FROM owner\n    JOIN inbox.knowledge_items knowledge ON knowledge.user_id = owner.id\n    CROSS JOIN period\n    CROSS JOIN LATERAL jsonb_array_elements_text(knowledge.next_actions) action(value)\n    WHERE knowledge.created_at >= period.period_start::timestamptz\n    ORDER BY knowledge.created_at DESC\n    LIMIT 5\n  ) limited\n), duplicates AS (\n  SELECT count(*) AS count\n  FROM inbox.relations relation\n  JOIN inbox.knowledge_items source ON source.id = relation.source_item_id\n  JOIN owner ON owner.id = source.user_id\n  WHERE relation.relation_type = 'duplicate'\n), storage AS (\n  SELECT coalesce(max(current_bytes), 0) AS current_bytes, coalesce(max(threshold_bytes), 7000000000) AS threshold_bytes\n  FROM owner LEFT JOIN inbox.storage_thresholds threshold ON threshold.user_id = owner.id AND threshold.storage_provider = 'backblaze_b2'\n)\nSELECT owner.id::text AS user_id, owner.telegram_chat_id::text AS chat_id,\n  period.period_start::text AS period_start, period.period_end::text AS period_end,\n  (SELECT count(*) FROM new_items) AS new_count,\n  (SELECT count(*) FROM inbox.inbox_items item WHERE item.user_id = owner.id AND item.status = 'ready') AS ready_total,\n  (SELECT count(*) FROM review_queue) AS review_count, duplicates.count AS duplicate_count,\n  top_projects.items AS top_projects, top_categories.items AS top_categories, latest_items.items AS latest_items,\n  relation_stats.counts AS relation_counts, actions.items AS next_actions,\n  storage.current_bytes, storage.threshold_bytes\nFROM owner CROSS JOIN period CROSS JOIN top_projects CROSS JOIN top_categories CROSS JOIN latest_items CROSS JOIN relation_stats CROSS JOIN actions CROSS JOIN duplicates CROSS JOIN storage;",
+        "options": {"queryBatching": "independently"}
+      },
+      "id": "b2ae56f9-9ae3-4572-a247-a4eff297a47e",
+      "name": "Load Weekly Digest",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-250, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json;\nconst e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst arr = (value) => { if (Array.isArray(value)) return value; if (typeof value === 'string') { try { return JSON.parse(value); } catch {} } return []; };\nconst obj = (value) => { if (value && typeof value === 'object' && !Array.isArray(value)) return value; if (typeof value === 'string') { try { return JSON.parse(value); } catch {} } return {}; };\nconst projects = arr(row.top_projects);\nconst categories = arr(row.top_categories);\nconst latest = arr(row.latest_items);\nconst actions = arr(row.next_actions);\nconst relations = obj(row.relation_counts);\nconst storageMb = (Number(row.current_bytes || 0) / 1000000).toFixed(1);\nconst storagePercent = Number(row.threshold_bytes || 0) > 0 ? ((Number(row.current_bytes || 0) / Number(row.threshold_bytes)) * 100).toFixed(1) : '0.0';\nconst sections = [\n  `<b>🧠 Щотижневий Inbox Digest</b>\n${e(row.period_start)} — ${e(row.period_end)}`,\n  `<b>За тиждень</b>\nНових матеріалів: ${Number(row.new_count || 0)}\nГотових у пам’яті: ${Number(row.ready_total || 0)}\nПотребують review: ${Number(row.review_count || 0)}\nДублікатів: ${Number(row.duplicate_count || 0)}`,\n  projects.length ? `<b>Проєкти</b>\n${projects.map((item) => `• ${e(item.name)} — ${Number(item.count || 0)}`).join('\\n')}` : '',\n  categories.length ? `<b>Категорії</b>\n${categories.map((item) => `• ${e(item.name)} — ${Number(item.count || 0)}`).join('\\n')}` : '',\n  Object.keys(relations).length ? `<b>Нові зв’язки</b>\n${Object.entries(relations).map(([type, count]) => `• ${e(type)} — ${Number(count || 0)}`).join('\\n')}` : '',\n  latest.length ? `<b>Останні матеріали</b>\n${latest.map((item) => `• <code>${e(item.short_id)}</code> ${e(item.title)} · ${e(item.project)}`).join('\\n')}` : '',\n  actions.length ? `<b>Запропоновані дії</b>\n${actions.map((action) => `• ${e(action)}`).join('\\n')}` : '',\n  `<b>B2</b>\n${storageMb} MB · ${storagePercent}% від порогу 7 GB`,\n  `<code>/review</code> · <code>/duplicates</code> · <code>/recent</code>`\n].filter(Boolean);\nreturn [{ json: { ...row, reply: sections.join('\\n\\n').slice(0, 4000) } }];"
+      },
+      "id": "8f12ac26-5141-410a-bf0f-dbf476bb35c1",
+      "name": "Prepare Weekly Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "5d697c6c-847f-4740-880d-dce7a5fa0ef1",
+      "name": "Send Weekly Digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [250, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO inbox.digest_runs (user_id, digest_type, period_start, period_end, delivered_at, metrics)\nVALUES ($1::uuid, 'weekly', $2::date, $3::date, now(), jsonb_build_object('new_count', $4::integer, 'review_count', $5::integer, 'duplicate_count', $6::integer, 'current_bytes', $7::bigint))\nON CONFLICT (user_id, digest_type, period_start, period_end) DO UPDATE SET delivered_at = EXCLUDED.delivered_at, metrics = EXCLUDED.metrics\nRETURNING id::text AS digest_run_id, delivered_at;",
+        "options": {
+          "queryReplacement": "={{ [ $('Load Weekly Digest').first().json.user_id, $('Load Weekly Digest').first().json.period_start, $('Load Weekly Digest').first().json.period_end, $('Load Weekly Digest').first().json.new_count, $('Load Weekly Digest').first().json.review_count, $('Load Weekly Digest').first().json.duplicate_count, $('Load Weekly Digest').first().json.current_bytes ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "90ac2cd4-472e-4615-a74b-3044bd668cb4",
+      "name": "Record Digest Delivery",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [500, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    }
+  ],
+  "connections": {
+    "Every Sunday Evening": {"main": [[{"node": "Load Weekly Digest", "type": "main", "index": 0}]]},
+    "Manual Digest Trigger": {"main": [[{"node": "Load Weekly Digest", "type": "main", "index": 0}]]},
+    "Load Weekly Digest": {"main": [[{"node": "Prepare Weekly Digest", "type": "main", "index": 0}]]},
+    "Prepare Weekly Digest": {"main": [[{"node": "Send Weekly Digest", "type": "main", "index": 0}]]},
+    "Send Weekly Digest": {"main": [[{"node": "Record Digest Delivery", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "7e190960-778a-4d1a-838c-53771cb7011f",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}
