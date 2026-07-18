@@ -13,7 +13,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT inbox.execute_memory_command($1::bigint, $2::text, $3::text) AS result, $4::text AS chat_id;",
+        "query": "WITH command_result AS (\n  SELECT CASE\n    WHEN lower($2::text) IN ('review', 'edit', 'unarchive', 'related')\n      THEN inbox.execute_knowledge_curation_command($1::bigint, $2::text, $3::text)\n    ELSE inbox.execute_memory_command($1::bigint, $2::text, $3::text)\n  END AS result\n)\nSELECT CASE\n  WHEN lower($2::text) IN ('memory', 'review', 'edit', 'unarchive', 'related')\n    AND result->>'route' = 'direct'\n    THEN result || jsonb_build_object('route', 'curation_direct')\n  ELSE result\nEND AS result, $4::text AS chat_id\nFROM command_result;",
         "options": {
           "queryReplacement": "={{ [ $json.telegram_user_id, $json.management_command || '', $json.management_argument || '', $json.source_chat_id ] }}",
           "queryBatching": "independently"
@@ -45,6 +45,16 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [-270, -260]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.route !== 'curation_direct') return [];\nconst e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst status = String($json.status || 'help');\nlet reply = '';\nif (status === 'review') {\n  const items = Array.isArray($json.items) ? $json.items : [];\n  reply = items.length ? `<b>Черга перевірки</b>\n\n${items.map((item) => `• <code>${e(item.short_id)}</code> — ${e(item.title)}\n  ${e((Array.isArray(item.reasons) ? item.reasons : []).join(', '))}`).join('\\n\\n')}\n\nВиправити: <code>/edit ID поле=значення</code>` : '✅ Записів, які потребують перевірки, немає.';\n} else if (status === 'related') {\n  const items = Array.isArray($json.items) ? $json.items : [];\n  reply = items.length ? `<b>Пов’язані з ${e($json.short_id)}</b>\n${e($json.title)}\n\n${items.map((item) => `• <code>${e(item.short_id)}</code> — ${e(item.title)}\n  схожість ${Math.round(Number(item.score || 0) * 100)}% · ${e((Array.isArray(item.reasons) ? item.reasons : []).join(', '))}`).join('\\n\\n')}` : `Для <code>${e($json.short_id)}</code> пов’язаних записів поки не знайдено.`;\n} else if (status === 'unarchived') {\n  reply = `📤 Запис <code>${e($json.short_id)}</code> повернено з архіву.\n${e($json.title)}`;\n} else if (status === 'edit_spec_required') {\n  reply = `Вкажіть зміни після ID. Приклад:\n<code>/edit ID project=AI Studio; category=AI; priority=High; tags=n8n, Gemini</code>`;\n} else if (status === 'edit_invalid_assignment') {\n  reply = `Не розпізнано зміну <code>${e($json.value)}</code>. Використовуйте формат <code>поле=значення</code> і розділяйте поля крапкою з комою.`;\n} else if (status === 'edit_unknown_value') {\n  reply = `Невідоме значення <code>${e($json.value)}</code> для поля <code>${e($json.field)}</code>. Використайте назву з чинної таксономії.`;\n} else if (status === 'edit_unknown_field') {\n  reply = `Невідоме поле <code>${e($json.field)}</code>. Доступні: project, category, type, priority, tags, title, summary.`;\n} else if (status === 'edit_empty_value') {\n  reply = `Поле <code>${e($json.field)}</code> не може бути порожнім.`;\n} else if (status === 'knowledge_not_ready') {\n  reply = 'AI-аналіз цього запису ще не готовий. Спробуйте пізніше або перевірте його статус через /show.';\n} else if (['item_id_required', 'item_not_found', 'item_id_ambiguous', 'unauthorized'].includes(status)) {\n  const messages = { item_id_required: 'Вкажіть щонайменше 6 символів ID. Отримати ID: /recent.', item_not_found: 'Запис із таким ID не знайдено.', item_id_ambiguous: 'Фрагмент ID неоднозначний — вкажіть більше символів.', unauthorized: '⛔ Немає доступу до пам’яті.' };\n  reply = e(messages[status]);\n} else {\n  reply = `<b>Керування пам’яттю</b>\n\n<code>/recent</code> — останні записи\n<code>/review</code> — черга перевірки\n<code>/show ID</code> — деталі\n<code>/edit ID поле=значення</code> — виправити аналіз\n<code>/related ID</code> — пов’язані записи\n<code>/archive ID</code> / <code>/unarchive ID</code>\n<code>/reindex ID</code> — перебудувати RAG\n<code>/delete ID</code> — безпечне видалення`;\n}\nreturn [{ json: { chat_id: $json.chat_id, reply } }];"
+      },
+      "id": "c1cbcc8f-ef24-4556-b38e-fd0b3e087911",
+      "name": "Prepare Curation Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-270, -420]
     },
     {
       "parameters": {
@@ -261,7 +271,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn [{ json: { chat_id: $json.chat_id, reply: `🔄 Переіндексацію запущено для <code>${e($json.short_id)}</code>.\n${e($json.title)}\n\nСтарі фрагменти: ${Number($json.old_chunks_removed || 0)}. Новий RAG-індекс створюється у фоні.` } }];"
+        "jsCode": "const e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst command = $('Normalize Command Result').first().json;\nconst changes = command.changes && typeof command.changes === 'object' ? Object.entries(command.changes).map(([key, value]) => `${key}=${value}`).join('; ') : '';\nconst heading = command.status === 'edited' ? '✏️ Аналіз виправлено' : '🔄 Переіндексацію запущено';\nconst detail = command.status === 'edited' ? `\n<b>Зміни:</b> ${e(changes)}\nRAG-індекс оновлюється у фоні.` : `\nСтарі фрагменти: ${Number($json.old_chunks_removed || 0)}. Новий RAG-індекс створюється у фоні.`;\nreturn [{ json: { chat_id: $json.chat_id, reply: `${heading} для <code>${e($json.short_id)}</code>.\n${e($json.title)}\n${detail}` } }];"
       },
       "id": "c07bf62b-15cb-4920-b388-92cf98c010da",
       "name": "Prepare Reindex Reply",
@@ -289,10 +299,12 @@
     "When Executed by Another Workflow": {"main": [[{"node": "Execute Memory Command", "type": "main", "index": 0}]]},
     "Execute Memory Command": {"main": [[{"node": "Normalize Command Result", "type": "main", "index": 0}]]},
     "Normalize Command Result": {"main": [[
+      {"node": "Prepare Curation Reply", "type": "main", "index": 0},
       {"node": "Prepare Direct Reply", "type": "main", "index": 0},
       {"node": "Pass Confirmed Delete", "type": "main", "index": 0},
       {"node": "Pass Reindex Request", "type": "main", "index": 0}
     ]]},
+    "Prepare Curation Reply": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
     "Prepare Direct Reply": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
     "Pass Confirmed Delete": {"main": [[{"node": "Prepare Safe Deletion", "type": "main", "index": 0}]]},
     "Prepare Safe Deletion": {"main": [[{"node": "Delete Item Vectors", "type": "main", "index": 0}]]},
