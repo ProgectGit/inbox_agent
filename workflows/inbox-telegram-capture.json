@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json;\nconst message = input.message || {};\nconst rawText = String(message.text || message.caption || '');\nconst normalizedText = rawText.trim().replace(/\\s+/g, ' ');\nconst lower = normalizedText.toLocaleLowerCase('uk-UA');\nconst urls = normalizedText.match(/https?:\\/\\/[^\\s]+/gi) || [];\nconst photo = Array.isArray(message.photo) ? message.photo.at(-1) : null;\nconst voice = message.voice || null;\nconst document = message.document || null;\nconst mediaKind = voice ? 'voice' : photo ? 'photo' : document ? 'document' : null;\nconst file = voice || photo || document || {};\nconst mimeType = String(file.mime_type || (photo ? 'image/jpeg' : ''));\nconst blockedDocument = document && /(?:zip|x-rar|x-7z|octet-stream)/i.test(mimeType);\nconst forceCapture = /^\\/(save|inbox)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText);\nconst searchIntent = !mediaKind && !forceCapture && (\n  /^\\/(search|find)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText) ||\n  /^(знайди|знайдіть|покажи|покажіть|що я знаю|що в мене є|які (?:в мене|у мене)|пошукай|де (?:в мене|у мене))\\b/i.test(lower)\n);\nconst query = normalizedText.replace(/^\\/(search|find)(?:@\\w+)?\\s*/i, '').trim();\nconst captureText = normalizedText.replace(/^\\/(save|inbox)(?:@\\w+)?\\s*/i, '').trim();\nconst supported = mediaKind ? !blockedDocument : normalizedText.length > 0;\n\nreturn [{ json: {\n  telegram_user_id: String(message.from?.id || ''),\n  source_message_id: String(message.message_id || ''),\n  source_chat_id: String(message.chat?.id || ''),\n  content_type: voice ? 'voice' : photo ? 'photo' : document ? 'file' : urls.length > 0 ? 'link' : 'text',\n  raw_text: rawText,\n  normalized_text: forceCapture ? captureText : normalizedText,\n  source_url: urls[0] || null,\n  supported,\n  intent: searchIntent ? 'search' : 'capture',\n  query,\n  media_kind: mediaKind,\n  file_id: String(file.file_id || ''),\n  file_unique_id: String(file.file_unique_id || ''),\n  file_name: String(document?.file_name || (voice ? `voice-${message.message_id}.ogg` : photo ? `photo-${message.message_id}.jpg` : '')),\n  mime_type: mimeType,\n  file_size: Number(file.file_size || 0),\n  raw_payload: input\n} }];"
+        "jsCode": "const input = $json;\nconst message = input.message || {};\nconst rawText = String(message.text || message.caption || '');\nconst normalizedText = rawText.trim().replace(/\\s+/g, ' ');\nconst lower = normalizedText.toLocaleLowerCase('uk-UA');\nconst urls = normalizedText.match(/https?:\\/\\/[^\\s]+/gi) || [];\nconst photo = Array.isArray(message.photo) ? message.photo.at(-1) : null;\nconst voice = message.voice || null;\nconst document = message.document || null;\nconst mediaKind = voice ? 'voice' : photo ? 'photo' : document ? 'document' : null;\nconst file = voice || photo || document || {};\nconst mimeType = String(file.mime_type || (photo ? 'image/jpeg' : ''));\nconst fileName = String(document?.file_name || (voice ? `voice-${message.message_id}.ogg` : photo ? `photo-${message.message_id}.jpg` : ''));\nconst fileSize = Number(file.file_size || 0);\nconst pdfDocument = Boolean(document) && (mimeType.toLowerCase() === 'application/pdf' || /\\.pdf$/i.test(fileName));\nconst blockedDocument = Boolean(document) && !pdfDocument && /(?:zip|x-rar|x-7z|octet-stream)/i.test(mimeType);\nconst oversizedDocument = Boolean(document) && fileSize > 20 * 1024 * 1024;\nconst forceCapture = /^\\/(save|inbox)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText);\nconst searchIntent = !mediaKind && !forceCapture && (\n  /^\\/(search|find)(?:@\\w+)?(?:\\s|$)/i.test(normalizedText) ||\n  /^(знайди|знайдіть|покажи|покажіть|що я знаю|що в мене є|які (?:в мене|у мене)|пошукай|де (?:в мене|у мене))\\b/i.test(lower)\n);\nconst query = normalizedText.replace(/^\\/(search|find)(?:@\\w+)?\\s*/i, '').trim();\nconst captureText = normalizedText.replace(/^\\/(save|inbox)(?:@\\w+)?\\s*/i, '').trim();\nconst supported = mediaKind ? !blockedDocument && !oversizedDocument : normalizedText.length > 0;\nconst unsupportedReason = blockedDocument ? 'archive_or_opaque_binary' : oversizedDocument ? 'file_over_20mb' : null;\n\nreturn [{ json: {\n  telegram_user_id: String(message.from?.id || ''),\n  source_message_id: String(message.message_id || ''),\n  source_chat_id: String(message.chat?.id || ''),\n  content_type: voice ? 'voice' : photo ? 'photo' : document ? 'file' : urls.length > 0 ? 'link' : 'text',\n  raw_text: rawText,\n  normalized_text: forceCapture ? captureText : normalizedText,\n  source_url: urls[0] || null,\n  supported,\n  unsupported_reason: unsupportedReason,\n  intent: searchIntent ? 'search' : 'capture',\n  query,\n  media_kind: mediaKind,\n  file_id: String(file.file_id || ''),\n  file_unique_id: String(file.file_unique_id || ''),\n  file_name: fileName,\n  mime_type: mimeType,\n  file_size: fileSize,\n  raw_payload: input\n} }];"
       },
       "id": "6659bb9c-3804-47e1-935b-75b5c1f7a288",
       "name": "Normalize Telegram Input",
@@ -199,6 +199,16 @@
       "position": [-300, 420]
     },
     {
+      "parameters": {
+        "jsCode": "if (!$json.media_kind || $json.supported) return [];\nreturn [{ json: $json }];"
+      },
+      "id": "41f526fe-a7c7-4c18-9cbf-ff72a25ce33a",
+      "name": "Pass Unsupported Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 520]
+    },
+    {
       "parameters": {"jsCode": "return $json.media_kind === 'voice' ? [{ json: $json }] : [];"},
       "id": "57ac4930-1532-420a-842d-3fc80e4ffae0",
       "name": "Filter Voice",
@@ -261,13 +271,69 @@
     },
     {
       "parameters": {
-        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst local = mime.startsWith('text/')\n  || /wordprocessingml\\.document|application\\/(json|xml|csv)/i.test(mime)\n  || /\\.(docx|txt|md|csv|json|xml)$/.test(name);\nreturn local ? [] : [{ json: $json, binary: $binary }];"
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst local = mime.startsWith('text/')\n  || /wordprocessingml\\.document|application\\/(json|xml|csv)/i.test(mime)\n  || /\\.(docx|txt|md|csv|json|xml)$/.test(name);\nconst pdf = mime === 'application/pdf' || name.endsWith('.pdf');\nreturn local || pdf ? [] : [{ json: $json, binary: $binary }];"
       },
       "id": "47f3d787-c22f-4a59-be6e-12cd42363ca8",
       "name": "Filter Gemini Document",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [410, 560]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst mime = String(original.mime_type || '').toLowerCase();\nconst name = String(original.file_name || '').toLowerCase();\nconst pdf = mime === 'application/pdf' || name.endsWith('.pdf');\nreturn pdf ? [{ json: $json, binary: $binary }] : [];"
+      },
+      "id": "08ed7c31-4082-44e8-96ad-433b7268bdf7",
+      "name": "Filter PDF Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [410, 760]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {
+          "joinPages": true,
+          "keepSource": "both",
+          "maxPages": 300
+        }
+      },
+      "id": "2a42a44b-e272-4614-bad0-e0db10ac1645",
+      "name": "Extract PDF Text Layer",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [650, 760]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = String($json.text || '').trim();\nconst compactLength = text.replace(/\\s+/g, '').length;\nconst pages = Number($json.numpages || 0);\nconst minimum = Math.max(80, Math.min(pages || 1, 20) * 25);\nreturn compactLength >= minimum ? [{ json: $json, binary: $binary }] : [];"
+      },
+      "id": "4ca224ae-0578-4135-a895-1a7fe220b3dc",
+      "name": "Filter Searchable PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [890, 720]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = String($json.text || '').trim();\nconst compactLength = text.replace(/\\s+/g, '').length;\nconst pages = Number($json.numpages || 0);\nconst minimum = Math.max(80, Math.min(pages || 1, 20) * 25);\nreturn compactLength < minimum ? [{ json: $json, binary: $binary }] : [];"
+      },
+      "id": "31effba0-1898-45e4-a701-7ee199435831",
+      "name": "Filter Scanned PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [890, 820]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst fullText = String($json.text || '').replace(/\\r/g, '').replace(/[ \\t]+/g, ' ').replace(/ *\\n */g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\nconst pages = Number($json.numpages || 0);\nconst info = $json.info && typeof $json.info === 'object' ? $json.info : {};\nconst title = String(info.Title || info.title || original.file_name || '').trim();\nconst author = String(info.Author || info.author || '').trim();\nconst truncated = fullText.length > 120000 || pages > 300;\nconst extracted = fullText.slice(0, 120000);\nconst caption = String(original.normalized_text || '').trim();\nconst header = [\n  title ? `Назва документа: ${title}` : '',\n  author ? `Автор: ${author}` : '',\n  pages ? `Сторінок у PDF: ${pages}` : '',\n  truncated ? 'Примітка: для аналізу збережено перші 300 сторінок або 120000 символів.' : ''\n].filter(Boolean).join('\\n');\nconst normalized = [caption, header, extracted].filter(Boolean).join('\\n\\n').trim();\nreturn [{ json: {\n  ...original,\n  raw_text: caption || title || extracted.slice(0, 1000),\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: {\n    ...original.raw_payload,\n    extraction: {\n      provider: 'pdfjs',\n      status: 'text_layer',\n      pages,\n      pages_read: Math.min(pages, 300),\n      title: title || null,\n      author: author || null,\n      extracted_characters: fullText.length,\n      stored_characters: extracted.length,\n      truncated\n    }\n  }\n} }];"
+      },
+      "id": "5f2d96dc-3635-469f-9da8-1a6b2acd95af",
+      "name": "Normalize PDF Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 720]
     },
     {
       "parameters": {
@@ -332,7 +398,7 @@
         "resource": "document",
         "operation": "analyze",
         "modelId": {"__rl": true, "value": "models/gemini-3.1-flash-lite", "mode": "id"},
-        "text": "Витягни та структуровано передай основний текст документа. Не вигадуй даних. Поверни лише зміст, придатний для пошуку в базі знань.",
+        "text": "Проаналізуй документ будь-якою мовою. Якщо це сканований PDF, виконай OCR усіх доступних сторінок. Не вигадуй текст і факти. Поверни структурований матеріал: назва документа, мова оригіналу, коротке резюме українською, найважливіші тези українською, а потім розпізнаний зміст мовою оригіналу. Якщо частину сторінок неможливо прочитати, прямо зазнач це. Поверни лише зміст, придатний для пошуку в базі знань.",
         "inputType": "binary",
         "binaryPropertyName": "data",
         "simplify": true,
@@ -347,7 +413,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst parts = $json.content?.parts || $json.candidate?.content?.parts || [];\nconst extracted = parts.map((part) => part.text || '').filter(Boolean).join('\\n').trim()\n  || String($json.text || $json.output || '').trim();\nconst caption = String(original.normalized_text || '').trim();\nconst normalized = [caption, extracted].filter(Boolean).join('\\n\\n').trim();\nreturn [{ json: {\n  ...original,\n  raw_text: caption || extracted,\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: { ...original.raw_payload, extraction: { provider: 'gemini', media_kind: original.media_kind } }\n} }];"
+        "jsCode": "const original = $('Normalize Telegram Input').first().json;\nconst parts = $json.content?.parts || $json.candidate?.content?.parts || [];\nconst extracted = parts.map((part) => part.text || '').filter(Boolean).join('\\n').trim()\n  || String($json.text || $json.output || '').trim();\nconst caption = String(original.normalized_text || '').trim();\nconst normalized = [caption, extracted].filter(Boolean).join('\\n\\n').slice(0, 120000).trim();\nconst isPdf = String(original.mime_type || '').toLowerCase() === 'application/pdf' || /\\.pdf$/i.test(String(original.file_name || ''));\nreturn [{ json: {\n  ...original,\n  raw_text: caption || extracted.slice(0, 1000),\n  normalized_text: normalized,\n  supported: normalized.length > 0,\n  raw_payload: {\n    ...original.raw_payload,\n    extraction: {\n      provider: isPdf ? 'gemini-pdf-ocr' : 'gemini',\n      status: isPdf ? 'ocr_fallback' : 'ai_document',\n      media_kind: original.media_kind,\n      extracted_characters: extracted.length,\n      stored_characters: normalized.length,\n      truncated: extracted.length > 120000\n    }\n  }\n} }];"
       },
       "id": "3eddd35d-c6bf-4e3b-935b-e7e030099dec",
       "name": "Normalize Extracted Media",
@@ -539,8 +605,12 @@
         {"node": "Pass Capture Requests", "type": "main", "index": 0},
         {"node": "Pass Web Links", "type": "main", "index": 0},
         {"node": "Pass Search Requests", "type": "main", "index": 0},
-        {"node": "Pass Media Requests", "type": "main", "index": 0}
+        {"node": "Pass Media Requests", "type": "main", "index": 0},
+        {"node": "Pass Unsupported Media", "type": "main", "index": 0}
       ]]
+    },
+    "Pass Unsupported Media": {
+      "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
     },
     "Pass Capture Requests": {
       "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]
@@ -589,12 +659,21 @@
     "Download Photo": {"main": [[{"node": "Analyze Photo with Gemini", "type": "main", "index": 0}]]},
     "Download Document": {"main": [[
       {"node": "Filter Local Document", "type": "main", "index": 0},
-      {"node": "Filter Gemini Document", "type": "main", "index": 0}
+      {"node": "Filter Gemini Document", "type": "main", "index": 0},
+      {"node": "Filter PDF Document", "type": "main", "index": 0}
     ]]},
     "Filter Local Document": {"main": [[{"node": "Read Local Document Binary", "type": "main", "index": 0}]]},
     "Read Local Document Binary": {"main": [[{"node": "Extract DOCX or Text", "type": "main", "index": 0}]]},
     "Extract DOCX or Text": {"main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]},
     "Filter Gemini Document": {"main": [[{"node": "Analyze Document with Gemini", "type": "main", "index": 0}]]},
+    "Filter PDF Document": {"main": [[{"node": "Extract PDF Text Layer", "type": "main", "index": 0}]]},
+    "Extract PDF Text Layer": {"main": [[
+      {"node": "Filter Searchable PDF", "type": "main", "index": 0},
+      {"node": "Filter Scanned PDF", "type": "main", "index": 0}
+    ]]},
+    "Filter Searchable PDF": {"main": [[{"node": "Normalize PDF Text", "type": "main", "index": 0}]]},
+    "Normalize PDF Text": {"main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]},
+    "Filter Scanned PDF": {"main": [[{"node": "Analyze Document with Gemini", "type": "main", "index": 0}]]},
     "Transcribe Voice with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
     "Analyze Photo with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
     "Analyze Document with Gemini": {"main": [[{"node": "Normalize Extracted Media", "type": "main", "index": 0}]]},
