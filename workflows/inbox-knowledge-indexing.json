@@ -171,6 +171,21 @@
       "waitBetweenTries": 3000,
       "position": [830, 0],
       "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {"__rl": true, "value": "InboxRelationBuilder01", "mode": "list", "cachedResultName": "Inbox — Automatic Relation Builder"},
+        "workflowInputs": {"mappingMode": "defineBelow", "value": {}, "matchingColumns": [], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": true},
+        "mode": "each",
+        "options": {"waitForSubWorkflow": false}
+      },
+      "id": "db29d70e-8e88-4a75-827a-14ebd2ce9226",
+      "name": "Start Relation Builder",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1070, 0]
     }
   ],
   "connections": {
@@ -183,7 +198,8 @@
     "Gemini Embeddings": {"ai_embedding": [[{"node": "Index in Qdrant", "type": "ai_embedding", "index": 0}]]},
     "Load Chunk Document": {"ai_document": [[{"node": "Index in Qdrant", "type": "ai_document", "index": 0}]]},
     "Index in Qdrant": {"main": [[{"node": "Summarize Indexing", "type": "main", "index": 0}]]},
-    "Summarize Indexing": {"main": [[{"node": "Complete Index Job", "type": "main", "index": 0}]]}
+    "Summarize Indexing": {"main": [[{"node": "Complete Index Job", "type": "main", "index": 0}]]},
+    "Complete Index Job": {"main": [[{"node": "Start Relation Builder", "type": "main", "index": 0}]]}
   },
   "active": false,
   "settings": {

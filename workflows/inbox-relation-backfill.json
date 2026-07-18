@@ -1,0 +1,57 @@
+{
+  "id": "InboxRelationBackfill01",
+  "name": "Inbox — Relation Graph Backfill",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "dfc6a1a1-6528-41be-91d6-64e382b2f74b",
+      "name": "Manual Backfill Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-420, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT inbox_item_id::text AS inbox_item_id FROM inbox.knowledge_items WHERE is_archived = false ORDER BY created_at;",
+        "options": {"queryBatching": "independently"}
+      },
+      "id": "6f992984-8d9a-457d-a6be-45240db4cfb8",
+      "name": "Load All Knowledge Items",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-170, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {"__rl": true, "value": "InboxRelationBuilder01", "mode": "list", "cachedResultName": "Inbox — Automatic Relation Builder"},
+        "workflowInputs": {"mappingMode": "defineBelow", "value": {}, "matchingColumns": [], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": true},
+        "mode": "each",
+        "options": {"waitForSubWorkflow": true}
+      },
+      "id": "0e183356-94a4-4f90-ad8d-0a726f2b5774",
+      "name": "Build Historical Relations",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [90, 0]
+    }
+  ],
+  "connections": {
+    "Manual Backfill Trigger": {"main": [[{"node": "Load All Knowledge Items", "type": "main", "index": 0}]]},
+    "Load All Knowledge Items": {"main": [[{"node": "Build Historical Relations", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "264c137c-2fe8-4432-9448-797983762a44",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}

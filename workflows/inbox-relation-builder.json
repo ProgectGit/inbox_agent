@@ -1,0 +1,171 @@
+{
+  "id": "InboxRelationBuilder01",
+  "name": "Inbox — Automatic Relation Builder",
+  "nodes": [
+    {
+      "parameters": {"inputSource": "passthrough"},
+      "id": "2f4ad116-04fa-4b89-a653-ab5fedf69d34",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-820, -80]
+    },
+    {
+      "parameters": {},
+      "id": "21af8eca-685f-4d42-9f93-d033fdb0bef4",
+      "name": "Manual Test Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-820, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT inbox_item_id::text AS inbox_item_id FROM inbox.knowledge_items WHERE is_archived = false ORDER BY created_at;",
+        "options": {"queryBatching": "independently"}
+      },
+      "id": "4a047a79-a70a-4483-90c8-b922a3b88e36",
+      "name": "Load Backfill Targets",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-590, 160],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT coalesce(nullif($1::text, '')::uuid, (SELECT inbox_item_id FROM inbox.knowledge_items WHERE is_archived = false ORDER BY updated_at DESC LIMIT 1))::text AS inbox_item_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.inbox_item_id || $json.item_id || '' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "87851519-f87b-4f1c-bffb-6137fba02291",
+      "name": "Resolve Relation Target",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-590, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target AS (\n  SELECT knowledge.*, project.name AS project, category.name AS category, item_type.name AS item_type,\n    coalesce(tags.names, '[]'::jsonb) AS tags, attachment.checksums\n  FROM inbox.knowledge_items knowledge\n  LEFT JOIN inbox.projects project ON project.id = knowledge.project_id\n  LEFT JOIN inbox.categories category ON category.id = knowledge.category_id\n  LEFT JOIN inbox.item_types item_type ON item_type.id = knowledge.item_type_id\n  LEFT JOIN LATERAL (\n    SELECT jsonb_agg(tag.normalized_name ORDER BY tag.normalized_name) AS names\n    FROM inbox.knowledge_item_tags link JOIN inbox.tags tag ON tag.id = link.tag_id\n    WHERE link.knowledge_item_id = knowledge.id\n  ) tags ON true\n  LEFT JOIN LATERAL (\n    SELECT array_agg(DISTINCT checksum_sha256) FILTER (WHERE checksum_sha256 IS NOT NULL) AS checksums\n    FROM inbox.attachments WHERE inbox_item_id = knowledge.inbox_item_id\n  ) attachment ON true\n  WHERE knowledge.inbox_item_id = $1::uuid AND knowledge.is_archived = false\n), scored AS (\n  SELECT candidate.id, candidate.inbox_item_id, candidate.title, candidate.summary,\n    project.name AS project, category.name AS category, item_type.name AS item_type,\n    coalesce(candidate_tags.names, '[]'::jsonb) AS tags,\n    shared_tags.count AS shared_tag_count,\n    CASE\n      WHEN target.checksums IS NOT NULL AND candidate_attachment.checksums IS NOT NULL AND target.checksums && candidate_attachment.checksums THEN 'duplicate'\n      WHEN target.source_url IS NOT NULL AND candidate.source_url = target.source_url THEN 'duplicate'\n      WHEN candidate.source_url IS NOT NULL AND position(lower(candidate.source_url) IN lower(target.content)) > 0 THEN 'references'\n      WHEN target.source_url IS NOT NULL AND position(lower(target.source_url) IN lower(candidate.content)) > 0 THEN 'references'\n      ELSE NULL\n    END AS hard_relation,\n    CASE\n      WHEN candidate.source_url IS NOT NULL AND position(lower(candidate.source_url) IN lower(target.content)) > 0 THEN 'target_to_candidate'\n      WHEN target.source_url IS NOT NULL AND position(lower(target.source_url) IN lower(candidate.content)) > 0 THEN 'candidate_to_target'\n      ELSE 'target_to_candidate'\n    END AS reference_direction,\n    least(1.0,\n      (CASE WHEN candidate.project_id IS NOT DISTINCT FROM target.project_id AND target.project_id IS NOT NULL THEN 0.30 ELSE 0 END)\n      + (CASE WHEN candidate.category_id IS NOT DISTINCT FROM target.category_id AND target.category_id IS NOT NULL THEN 0.30 ELSE 0 END)\n      + (CASE WHEN candidate.item_type_id IS NOT DISTINCT FROM target.item_type_id AND target.item_type_id IS NOT NULL THEN 0.10 ELSE 0 END)\n      + least(coalesce(shared_tags.count, 0) * 0.10, 0.30)\n      + (CASE WHEN target.checksums IS NOT NULL AND candidate_attachment.checksums IS NOT NULL AND target.checksums && candidate_attachment.checksums THEN 0.70 ELSE 0 END)\n      + (CASE WHEN target.source_url IS NOT NULL AND candidate.source_url = target.source_url THEN 0.70 ELSE 0 END)\n    ) AS heuristic_score,\n    candidate.created_at\n  FROM target\n  JOIN inbox.knowledge_items candidate ON candidate.user_id = target.user_id AND candidate.id <> target.id AND candidate.is_archived = false\n  LEFT JOIN inbox.projects project ON project.id = candidate.project_id\n  LEFT JOIN inbox.categories category ON category.id = candidate.category_id\n  LEFT JOIN inbox.item_types item_type ON item_type.id = candidate.item_type_id\n  LEFT JOIN LATERAL (\n    SELECT jsonb_agg(tag.normalized_name ORDER BY tag.normalized_name) AS names\n    FROM inbox.knowledge_item_tags link JOIN inbox.tags tag ON tag.id = link.tag_id\n    WHERE link.knowledge_item_id = candidate.id\n  ) candidate_tags ON true\n  LEFT JOIN LATERAL (\n    SELECT count(*)::integer AS count\n    FROM inbox.knowledge_item_tags target_tag\n    JOIN inbox.knowledge_item_tags candidate_tag ON candidate_tag.tag_id = target_tag.tag_id\n    WHERE target_tag.knowledge_item_id = target.id AND candidate_tag.knowledge_item_id = candidate.id\n  ) shared_tags ON true\n  LEFT JOIN LATERAL (\n    SELECT array_agg(DISTINCT checksum_sha256) FILTER (WHERE checksum_sha256 IS NOT NULL) AS checksums\n    FROM inbox.attachments WHERE inbox_item_id = candidate.inbox_item_id\n  ) candidate_attachment ON true\n), candidates AS (\n  SELECT * FROM scored\n  WHERE hard_relation IS NOT NULL OR heuristic_score >= 0.25\n  ORDER BY (hard_relation IS NOT NULL) DESC, heuristic_score DESC, created_at DESC\n  LIMIT 8\n)\nSELECT\n  target.id::text AS target_knowledge_id, target.inbox_item_id::text AS target_inbox_item_id,\n  jsonb_build_object('id', target.id::text, 'title', target.title, 'summary', target.summary, 'project', target.project, 'category', target.category, 'item_type', target.item_type, 'tags', target.tags) AS target,\n  coalesce((SELECT jsonb_agg(jsonb_build_object(\n    'id', candidates.id::text, 'inbox_item_id', candidates.inbox_item_id::text, 'title', candidates.title, 'summary', candidates.summary,\n    'project', candidates.project, 'category', candidates.category, 'item_type', candidates.item_type, 'tags', candidates.tags,\n    'shared_tag_count', candidates.shared_tag_count, 'hard_relation', candidates.hard_relation,\n    'reference_direction', candidates.reference_direction, 'heuristic_score', candidates.heuristic_score\n  ) ORDER BY (candidates.hard_relation IS NOT NULL) DESC, candidates.heuristic_score DESC) FROM candidates), '[]'::jsonb) AS candidates\nFROM target;",
+        "options": {
+          "queryReplacement": "={{ [ $json.inbox_item_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "88b47004-4803-4482-9ac9-da00c00ada37",
+      "name": "Load Relation Candidates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [-350, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "let candidates = $json.candidates || [];\nif (typeof candidates === 'string') { try { candidates = JSON.parse(candidates); } catch { candidates = []; } }\nif (!Array.isArray(candidates) || candidates.length === 0) return [];\nreturn [{ json: { ...$json, candidates } }];"
+      },
+      "id": "81e23bbb-c7ea-40be-bb34-02d5c3c507b3",
+      "name": "Pass Candidate Set",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-110, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ти будуєш граф знань Inbox Agent. Порівняй цільовий запис із кандидатами та поверни лише обґрунтовані зв’язки за JSON-схемою.\n\nТипи:\n- duplicate: фактично той самий матеріал або файл;\n- references: один матеріал прямо посилається на інший;\n- supports: один матеріал дає докази, реалізацію або корисне доповнення до іншого;\n- contradicts: твердження суттєво суперечать одне одному;\n- similar: зміст близький, але сильніший тип не доведено.\n\nНе вигадуй зв’язків. Для supports/references вкажи напрямок. Пояснення пиши українською, максимум 180 символів. Не повертай слабкі збіги лише через загальну категорію. Якщо hard_relation заданий, збережи цей тип і напрямок.\n\nЦіль:\n{{ JSON.stringify($json.target) }}\n\nКандидати:\n{{ JSON.stringify($json.candidates) }}",
+        "hasOutputParser": true,
+        "needsFallback": false,
+        "batching": {"batchSize": 1, "delayBetweenBatches": 0}
+      },
+      "id": "a425882b-ae87-4479-8d6d-0f721102ddf0",
+      "name": "Judge Knowledge Relations",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "position": [140, 0]
+    },
+    {
+      "parameters": {"modelName": "models/gemini-3.1-flash-lite", "options": {"temperature": 0.05}},
+      "id": "f844706b-5234-47d4-a846-3b3538c5d850",
+      "name": "Gemini Relation Judge",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [20, 230],
+      "credentials": {"googlePalmApi": {"id": "xWUoG184a9kWLGEL", "name": "Google Gemini(PaLM) Api account"}}
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"relations\": {\n      \"type\": \"array\",\n      \"maxItems\": 8,\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"candidate_id\": {\"type\": \"string\"},\n          \"relation_type\": {\"type\": \"string\", \"enum\": [\"similar\", \"supports\", \"contradicts\", \"references\", \"duplicate\"]},\n          \"direction\": {\"type\": \"string\", \"enum\": [\"target_to_candidate\", \"candidate_to_target\"]},\n          \"score\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1},\n          \"explanation\": {\"type\": \"string\", \"maxLength\": 180}\n        },\n        \"required\": [\"candidate_id\", \"relation_type\", \"direction\", \"score\", \"explanation\"]\n      }\n    }\n  },\n  \"required\": [\"relations\"]\n}",
+        "autoFix": true,
+        "customizeRetryPrompt": false
+      },
+      "id": "b2893575-413b-4385-aedd-058ab80a2642",
+      "name": "Relation Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [250, 230]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Pass Candidate Set').first().json;\nconst targetId = String(source.target_knowledge_id);\nconst candidates = new Map(source.candidates.map((candidate) => [String(candidate.id), candidate]));\nconst output = $json.output || $json;\nconst judged = Array.isArray(output.relations) ? output.relations : [];\nconst byId = new Map(judged.map((relation) => [String(relation.candidate_id), relation]));\nconst relations = [];\nfor (const [candidateId, candidate] of candidates) {\n  let relation = byId.get(candidateId);\n  if (candidate.hard_relation) {\n    relation = { candidate_id: candidateId, relation_type: candidate.hard_relation, direction: candidate.reference_direction || 'target_to_candidate', score: candidate.hard_relation === 'duplicate' ? 0.99 : Math.max(Number(candidate.heuristic_score || 0), 0.85), explanation: candidate.hard_relation === 'duplicate' ? 'Однаковий файл, контрольна сума або URL джерела.' : 'Виявлено пряме посилання між матеріалами.' };\n  } else if (!relation && Number(candidate.heuristic_score || 0) >= 0.55) {\n    relation = { candidate_id: candidateId, relation_type: 'similar', direction: 'target_to_candidate', score: Number(candidate.heuristic_score), explanation: 'Збігаються проєкт, категорія, тип або кілька тегів.' };\n  }\n  if (!relation) continue;\n  const type = String(relation.relation_type || '');\n  const score = Math.max(0, Math.min(1, Number(relation.score || 0)));\n  if (!['similar','supports','contradicts','references','duplicate'].includes(type)) continue;\n  if (!candidate.hard_relation && score < (type === 'similar' ? 0.45 : 0.55)) continue;\n  let sourceId = targetId;\n  let destinationId = candidateId;\n  if (['similar','duplicate','contradicts'].includes(type)) {\n    [sourceId, destinationId] = [targetId, candidateId].sort();\n  } else if (relation.direction === 'candidate_to_target') {\n    sourceId = candidateId; destinationId = targetId;\n  }\n  relations.push({ source_item_id: sourceId, target_item_id: destinationId, relation_type: type, score, explanation: String(relation.explanation || '').slice(0, 300) });\n}\nconst unique = [...new Map(relations.map((relation) => [`${relation.source_item_id}:${relation.target_item_id}:${relation.relation_type}`, relation])).values()];\nreturn [{ json: { target_knowledge_id: targetId, target_inbox_item_id: source.target_inbox_item_id, relations: unique } }];"
+      },
+      "id": "de4e5473-e28e-4ef8-ae70-f763d9929a12",
+      "name": "Validate Relation Decisions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [410, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH removed AS (\n  DELETE FROM inbox.relations\n  WHERE created_by = 'ai' AND (source_item_id = $1::uuid OR target_item_id = $1::uuid)\n  RETURNING id\n), incoming AS (\n  SELECT * FROM jsonb_to_recordset($2::jsonb) AS relation(\n    source_item_id uuid, target_item_id uuid, relation_type text, score numeric, explanation text\n  )\n), inserted AS (\n  INSERT INTO inbox.relations (source_item_id, target_item_id, relation_type, score, explanation, created_by)\n  SELECT source_item_id, target_item_id, relation_type, score, explanation, 'ai'\n  FROM incoming CROSS JOIN (SELECT count(*) FROM removed) cleanup\n  WHERE source_item_id <> target_item_id\n  ON CONFLICT (source_item_id, target_item_id, relation_type) DO UPDATE SET\n    score = EXCLUDED.score, explanation = EXCLUDED.explanation, created_by = 'ai'\n  RETURNING id\n)\nSELECT $1::uuid::text AS target_knowledge_id, $3::uuid::text AS target_inbox_item_id,\n  (SELECT count(*) FROM removed) AS removed_count, (SELECT count(*) FROM inserted) AS relation_count;",
+        "options": {
+          "queryReplacement": "={{ [ $json.target_knowledge_id, JSON.stringify($json.relations || []), $json.target_inbox_item_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "399b0627-1469-47a0-8524-f273450419f3",
+      "name": "Persist Knowledge Relations",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [660, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {"main": [[{"node": "Resolve Relation Target", "type": "main", "index": 0}]]},
+    "Manual Test Trigger": {"main": [[{"node": "Load Backfill Targets", "type": "main", "index": 0}]]},
+    "Load Backfill Targets": {"main": [[{"node": "Load Relation Candidates", "type": "main", "index": 0}]]},
+    "Resolve Relation Target": {"main": [[{"node": "Load Relation Candidates", "type": "main", "index": 0}]]},
+    "Load Relation Candidates": {"main": [[{"node": "Pass Candidate Set", "type": "main", "index": 0}]]},
+    "Pass Candidate Set": {"main": [[{"node": "Judge Knowledge Relations", "type": "main", "index": 0}]]},
+    "Gemini Relation Judge": {"ai_languageModel": [[{"node": "Judge Knowledge Relations", "type": "ai_languageModel", "index": 0}, {"node": "Relation Schema", "type": "ai_languageModel", "index": 0}]]},
+    "Relation Schema": {"ai_outputParser": [[{"node": "Judge Knowledge Relations", "type": "ai_outputParser", "index": 0}]]},
+    "Judge Knowledge Relations": {"main": [[{"node": "Validate Relation Decisions", "type": "main", "index": 0}]]},
+    "Validate Relation Decisions": {"main": [[{"node": "Persist Knowledge Relations", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "ec113b62-4b72-458f-898a-b529b94cac23",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}

@@ -48,6 +48,9 @@ AI nodes:
 - `Inbox — Telegram Memory Management`: owner-only listing, inspection,
   archiving, clean reindexing, and confirmed deletion across PostgreSQL,
   Qdrant, and B2.
+- `Inbox — Automatic Relation Builder`: runs after successful indexing,
+  detects hard duplicate/reference signals, asks Gemini to judge semantic
+  relations, and maintains the PostgreSQL knowledge graph.
 
 ## Object storage
 
@@ -68,7 +71,9 @@ Stored attachments record both the object key and a complete `s3://` path.
 The watchdog sends a one-time Telegram alert only after all eight upload
 attempts have been exhausted.
 
-All seven workflows are published on the production n8n instance. The older
+All eight production workflows are published on the production n8n instance.
+`Inbox — Relation Graph Backfill` is an inactive maintenance workflow for
+rebuilding relations across historical data. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
 and must remain inactive because a Telegram bot should have only one production
 webhook entry point.
@@ -159,6 +164,7 @@ Manage stored knowledge directly from Telegram:
 /show ID             show the structured analysis and attachments
 /edit ID ...         correct taxonomy, tags, title, or summary
 /related ID          find related records with an explained score
+/merge DUPLICATE MAIN request a safe merge into the main record
 /archive ID          archive a record without deleting it
 /unarchive ID        restore an archived record
 /reindex ID          clear stale vectors and rebuild the RAG index
@@ -188,6 +194,29 @@ the old Qdrant vectors, and rebuilds the RAG index automatically.
 content extraction, and records classified into `Other`. `/related` works even
 before durable relation rows exist: it scores shared project, category, type,
 tags, and any stored relation, then explains each match in Telegram.
+
+## Knowledge graph and merging
+
+Every completed RAG indexing job starts the relation builder in the background.
+SHA-256 checksum matches, identical source URLs, and direct URL references are
+treated as hard signals. Gemini reviews the strongest remaining candidates and
+may create `similar`, `supports`, `contradicts`, `references`, or `duplicate`
+relations with a score and a short Ukrainian explanation. Weak matches based
+only on a broad category are discarded.
+
+Merging is always explicit and directional:
+
+```text
+/merge DUPLICATE_ID MAIN_ID
+/confirm ONE_TIME_CODE
+```
+
+The confirmation expires after 10 minutes. A confirmed merge moves attachments,
+tags, document rows, memories, and reusable relations to the main item; records
+the source in `metadata.merged_sources`; deletes the duplicate PostgreSQL item
+and its Qdrant vectors; and reindexes the combined main item. B2 objects are not
+deleted during a merge, so deduplicated originals remain available. `/cancel`
+works for pending merges as well as pending deletions.
 
 Search the Second Brain with `/search ...`, `/find ...`, or natural Ukrainian
 phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`. Restrict
