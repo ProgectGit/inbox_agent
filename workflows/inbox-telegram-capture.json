@@ -40,13 +40,60 @@
     },
     {
       "parameters": {
-        "jsCode": "if ($json.intent === 'search' || $json.media_kind || $json.content_type === 'link') return [];\nreturn [{ json: $json }];"
+        "jsCode": "if ($json.intent !== 'capture' || $json.media_kind || $json.content_type === 'link') return [];\nreturn [{ json: $json }];"
       },
       "id": "b236ef97-93f9-430b-b930-c8235c990478",
       "name": "Pass Capture Requests",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [-300, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = String($json.normalized_text || '').trim();\nconst match = text.match(/^\\/(memory|recent|show|archive|delete|confirm|cancel|reindex)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/i);\nif (!match || $json.media_kind) return [{ json: $json }];\nreturn [{ json: { ...$json, intent: 'manage', management_command: String(match[1] || '').toLowerCase(), management_argument: String(match[2] || '').trim() } }];"
+      },
+      "id": "bb892fc7-70bc-49ab-9259-4ccbbb7267f0",
+      "name": "Detect Memory Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-390, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.intent !== 'manage') return [];\nreturn [{ json: { telegram_user_id: $json.telegram_user_id, source_chat_id: $json.source_chat_id, management_command: $json.management_command, management_argument: $json.management_argument } }];"
+      },
+      "id": "a166b106-678f-4a27-9191-c951d64c8db8",
+      "name": "Pass Memory Commands",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-150, 100]
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "InboxMemoryManagement01",
+          "mode": "list",
+          "cachedResultName": "Inbox — Telegram Memory Management"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {"waitForSubWorkflow": false}
+      },
+      "id": "8519e925-87df-4bc7-a974-aa59ba627264",
+      "name": "Start Memory Management",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [100, 100]
     },
     {
       "parameters": {
@@ -709,13 +756,20 @@
       }]]
     },
     "Normalize Telegram Input": {
+      "main": [[{"node": "Detect Memory Command", "type": "main", "index": 0}]]
+    },
+    "Detect Memory Command": {
       "main": [[
         {"node": "Pass Capture Requests", "type": "main", "index": 0},
         {"node": "Pass Web Links", "type": "main", "index": 0},
         {"node": "Pass Search Requests", "type": "main", "index": 0},
         {"node": "Pass Media Requests", "type": "main", "index": 0},
-        {"node": "Pass Unsupported Media", "type": "main", "index": 0}
+        {"node": "Pass Unsupported Media", "type": "main", "index": 0},
+        {"node": "Pass Memory Commands", "type": "main", "index": 0}
       ]]
+    },
+    "Pass Memory Commands": {
+      "main": [[{"node": "Start Memory Management", "type": "main", "index": 0}]]
     },
     "Pass Unsupported Media": {
       "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]

@@ -1,0 +1,329 @@
+{
+  "id": "InboxMemoryManagement01",
+  "name": "Inbox — Telegram Memory Management",
+  "nodes": [
+    {
+      "parameters": {"inputSource": "passthrough"},
+      "id": "7c0e8d5a-a5f3-4271-8aae-7cad5c0c1b3e",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-980, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT inbox.execute_memory_command($1::bigint, $2::text, $3::text) AS result, $4::text AS chat_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.telegram_user_id, $json.management_command || '', $json.management_argument || '', $json.source_chat_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "0c1a36d1-7137-4b88-b8c7-2fb958b73cc7",
+      "name": "Execute Memory Command",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-750, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "let result = $json.result || {};\nif (typeof result === 'string') { try { result = JSON.parse(result); } catch { result = {}; } }\nreturn [{ json: { ...result, chat_id: String($json.chat_id || '') } }];"
+      },
+      "id": "e9fe219a-3df1-48ef-9a44-bbaf8402b48b",
+      "name": "Normalize Command Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-520, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.route !== 'direct') return [];\nconst e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst status = String($json.status || 'help');\nlet reply = '';\nif (status === 'recent') {\n  const items = Array.isArray($json.items) ? $json.items : [];\n  reply = items.length ? `<b>Останні записи</b>\n\n${items.map((item) => `${item.is_archived ? '📦' : '•'} <code>${e(item.short_id)}</code> — ${e(item.title)}\n  ${e(item.content_type)} · ${e(item.status)}`).join('\\n\\n')}` : 'Пам’ять поки порожня.';\n} else if (status === 'show') {\n  const item = $json.item || {};\n  const tags = Array.isArray(item.tags) ? item.tags : [];\n  const files = Array.isArray(item.attachments) ? item.attachments : [];\n  reply = `<b>${e(item.title)}</b>\n<code>${e(item.short_id)}</code>${item.is_archived ? ' · 📦 архів' : ''}\n\n${e(item.summary)}\n\n<b>Проєкт:</b> ${e(item.project)}\n<b>Категорія:</b> ${e(item.category)}\n<b>Тип:</b> ${e(item.item_type)}\n<b>Пріоритет:</b> ${e(item.priority)}\n<b>Статус:</b> ${e(item.status)}${tags.length ? `\n<b>Теги:</b> ${tags.map(e).join(', ')}` : ''}${files.length ? `\n<b>Файли:</b> ${files.map(e).join(', ')}` : ''}${item.source_url ? `\n<b>Джерело:</b> ${e(item.source_url)}` : ''}`;\n} else if (status === 'archived') {\n  reply = `📦 Запис <code>${e($json.short_id)}</code> переміщено в архів.\n${e($json.title)}`;\n} else if (status === 'delete_confirmation') {\n  reply = `⚠️ <b>Підтвердження видалення</b>\n\n<code>${e($json.short_id)}</code> — ${e($json.title)}\n\nЦе видалить запис із PostgreSQL, його вектори з Qdrant і окремий файл із B2, якщо на нього немає інших посилань.\n\nПідтвердити протягом ${Number($json.expires_minutes || 10)} хвилин:\n<code>/confirm ${e($json.token)}</code>\n\nСкасувати:\n<code>/cancel ${e($json.token)}</code>`;\n} else if (status === 'cancelled') {\n  reply = '✅ Видалення скасовано.';\n} else if (status === 'unauthorized') {\n  reply = '⛔ Цей Telegram-користувач не має доступу до пам’яті.';\n} else if (status === 'token_required') {\n  reply = 'Вкажіть код підтвердження: <code>/confirm КОД</code> або <code>/cancel КОД</code>.';\n} else if (status === 'action_not_found') {\n  reply = 'Код підтвердження не знайдено.';\n} else if (status === 'action_not_pending') {\n  reply = 'Ця дія вже виконана, скасована або її код прострочений.';\n} else if (status === 'item_id_required') {\n  reply = 'Вкажіть щонайменше 6 символів ID запису. Отримати ID: <code>/recent</code>.';\n} else if (status === 'item_not_found') {\n  reply = 'Запис із таким ID не знайдено.';\n} else if (status === 'item_id_ambiguous') {\n  reply = 'Цей фрагмент ID неоднозначний — вкажіть більше символів.';\n} else {\n  reply = `<b>Керування пам’яттю</b>\n\n<code>/recent</code> — останні 10 записів\n<code>/show ID</code> — деталі запису\n<code>/archive ID</code> — перемістити в архів\n<code>/reindex ID</code> — перебудувати RAG-індекс\n<code>/delete ID</code> — підготувати безпечне видалення\n<code>/confirm КОД</code> — підтвердити видалення\n<code>/cancel КОД</code> — скасувати видалення`;\n}\nreturn [{ json: { chat_id: $json.chat_id, reply } }];"
+      },
+      "id": "e705e349-0d2e-49c3-bbe8-1198f6b1abdc",
+      "name": "Prepare Direct Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-270, -260]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "2b916412-2cd7-4a1e-b499-70c89930eb7e",
+      "name": "Send Management Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [10, -260],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {"jsCode": "return $json.route === 'confirm_delete' ? [{ json: $json }] : [];"},
+      "id": "e638303e-dad4-46cc-9801-b97864ca05c5",
+      "name": "Pass Confirmed Delete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-270, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH action AS (\n  SELECT pending.id, pending.user_id, pending.target_inbox_item_id\n  FROM inbox.pending_actions pending\n  WHERE pending.id = $1::uuid AND pending.status = 'confirmed'\n), objects AS (\n  SELECT DISTINCT attachment.storage_bucket, attachment.object_key\n  FROM action\n  JOIN inbox.attachments attachment ON attachment.inbox_item_id = action.target_inbox_item_id\n  WHERE attachment.storage_provider = 'backblaze_b2'\n    AND attachment.upload_status = 'stored'\n    AND attachment.storage_bucket IS NOT NULL\n    AND attachment.object_key IS NOT NULL\n    AND NOT EXISTS (\n      SELECT 1 FROM inbox.attachments other\n      WHERE other.inbox_item_id <> action.target_inbox_item_id\n        AND other.storage_provider = attachment.storage_provider\n        AND other.storage_bucket = attachment.storage_bucket\n        AND other.object_key = attachment.object_key\n        AND other.upload_status = 'stored'\n    )\n)\nSELECT action.id::text AS action_id, action.target_inbox_item_id::text AS item_id,\n  $2::text AS chat_id, $3::text AS title,\n  coalesce((SELECT jsonb_agg(jsonb_build_object('bucket', storage_bucket, 'key', object_key)) FROM objects), '[]'::jsonb) AS objects_to_delete\nFROM action;",
+        "options": {
+          "queryReplacement": "={{ [ $json.action_id, $json.chat_id, $json.title || '' ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "1c48984d-a3c8-48a8-8dc2-6fc54112a3f9",
+      "name": "Prepare Safe Deletion",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-20, 0],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "qdrantApi",
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/inbox_memory/points/delete?wait=true",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { filter: { must: [ { key: 'metadata.inbox_item_id', match: { value: $json.item_id } } ] } } }}",
+        "options": {"timeout": 15000}
+      },
+      "id": "d560d55b-4c62-47a5-8401-95e1096ed5df",
+      "name": "Delete Item Vectors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [230, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {"qdrantApi": {"id": "1300f473-db92-43ce-b7b5-4ca77738d433", "name": "Inbox Agent Qdrant"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Prepare Safe Deletion').first().json;\nlet objects = source.objects_to_delete || [];\nif (typeof objects === 'string') { try { objects = JSON.parse(objects); } catch { objects = []; } }\nif (!Array.isArray(objects) || objects.length === 0) return [{ json: { ...source, skip_b2: true } }];\nreturn objects.map((object) => ({ json: { ...source, skip_b2: false, storage_bucket: object.bucket, object_key: object.key } }));"
+      },
+      "id": "a66a15ea-583f-4c3b-aef6-e67ab57bcf68",
+      "name": "Expand B2 Deletions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {"jsCode": "return $json.skip_b2 ? [] : [{ json: $json }];"},
+      "id": "0accf49b-602b-435c-9168-26334d834696",
+      "name": "Pass B2 Objects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [710, -80]
+    },
+    {
+      "parameters": {"jsCode": "return $json.skip_b2 ? [{ json: $json }] : [];"},
+      "id": "e506ff41-2e7c-401e-b85a-c870164ed126",
+      "name": "Skip Shared or Missing B2 Objects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [710, 100]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "delete",
+        "bucketName": "={{ $json.storage_bucket }}",
+        "fileKey": "={{ $json.object_key }}",
+        "options": {}
+      },
+      "id": "40c86c3d-0a55-47f9-9963-285a47769aee",
+      "name": "Delete Unshared Original from B2",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [950, -80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {"s3": {"id": "20YWHyHI8TuFogpn", "name": "Backblaze B2 Inbox Storage"}}
+    },
+    {
+      "parameters": {"jsCode": "const source = $('Prepare Safe Deletion').first().json;\nreturn [{ json: source }];"},
+      "id": "e2a9f064-3f26-4199-8542-997713ef8257",
+      "name": "Collapse B2 Deletions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, -80]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH marked AS (\n  UPDATE inbox.pending_actions\n  SET status = 'completed', completed_at = now(), error_message = NULL\n  WHERE id = $1::uuid AND status = 'confirmed'\n  RETURNING target_inbox_item_id\n), deleted AS (\n  DELETE FROM inbox.inbox_items item\n  USING marked\n  WHERE item.id = marked.target_inbox_item_id\n  RETURNING item.id\n)\nSELECT $2::text AS chat_id, $3::text AS title,\n  coalesce((SELECT left(id::text, 8) FROM deleted), left($4::text, 8)) AS short_id,\n  EXISTS (SELECT 1 FROM deleted) AS deleted;",
+        "options": {
+          "queryReplacement": "={{ [ $('Prepare Safe Deletion').first().json.action_id, $('Prepare Safe Deletion').first().json.chat_id, $('Prepare Safe Deletion').first().json.title, $('Prepare Safe Deletion').first().json.item_id ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "f7b17a7d-727e-4377-816e-f5a3cb84d2be",
+      "name": "Finalize Database Deletion",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1410, 20],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst reply = $json.deleted ? `🗑 Запис <code>${e($json.short_id)}</code> видалено.\n${e($json.title)}\n\nPostgreSQL, Qdrant і незадубльований оригінал B2 очищено.` : 'Дію вже завершено або запис був видалений раніше.';\nreturn [{ json: { chat_id: $json.chat_id, reply } }];"
+      },
+      "id": "81c30329-6b38-4e93-bd21-fabacb58e467",
+      "name": "Prepare Delete Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 20]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "9f58491f-b2a5-49a2-b8b2-2931806a26a4",
+      "name": "Send Delete Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1880, 20],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {"jsCode": "return $json.route === 'reindex' ? [{ json: $json }] : [];"},
+      "id": "0c1ec3a1-b64e-4392-a00a-d913cab10024",
+      "name": "Pass Reindex Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-270, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "qdrantApi",
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/inbox_memory/points/delete?wait=true",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { filter: { must: [ { key: 'metadata.inbox_item_id', match: { value: $json.item_id } } ] } } }}",
+        "options": {"timeout": 15000}
+      },
+      "id": "77e4c16f-6618-4bb3-aeb3-619225437217",
+      "name": "Clear Vectors for Reindex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-20, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {"qdrantApi": {"id": "1300f473-db92-43ce-b7b5-4ca77738d433", "name": "Inbox Agent Qdrant"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target AS (\n  SELECT item.id, knowledge.id AS knowledge_item_id\n  FROM inbox.inbox_items item\n  JOIN inbox.knowledge_items knowledge ON knowledge.inbox_item_id = item.id\n  WHERE item.id = $1::uuid\n), removed AS (\n  DELETE FROM inbox.knowledge_chunks chunk USING target\n  WHERE chunk.knowledge_item_id = target.knowledge_item_id\n  RETURNING chunk.id\n), cancelled AS (\n  UPDATE inbox.processing_jobs job SET status = 'cancelled', locked_at = NULL, locked_by = NULL\n  FROM target\n  WHERE job.inbox_item_id = target.id AND job.job_type = 'index' AND job.status IN ('pending', 'running', 'failed')\n), queued AS (\n  INSERT INTO inbox.processing_jobs (inbox_item_id, job_type, status, payload)\n  SELECT id, 'index', 'pending', jsonb_build_object('reason', 'telegram_reindex') FROM target\n  RETURNING inbox_item_id\n), updated AS (\n  UPDATE inbox.inbox_items item SET status = 'indexing', error_code = NULL, error_message = NULL\n  FROM target WHERE item.id = target.id\n)\nSELECT queued.inbox_item_id::text AS inbox_item_id, $2::text AS chat_id, $3::text AS title, left(queued.inbox_item_id::text, 8) AS short_id, (SELECT count(*) FROM removed) AS old_chunks_removed\nFROM queued;",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalize Command Result').first().json.item_id, $('Normalize Command Result').first().json.chat_id, $('Normalize Command Result').first().json.title ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "a141be76-8d10-486c-b8f5-565a9d3fb0b4",
+      "name": "Queue Clean Reindex",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [230, 300],
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "call_workflow",
+        "source": "database",
+        "workflowId": {"__rl": true, "value": "InboxKnowledgeIndexing01", "mode": "list", "cachedResultName": "Inbox — Knowledge Indexing"},
+        "workflowInputs": {"mappingMode": "defineBelow", "value": {}, "matchingColumns": [], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": true},
+        "mode": "each",
+        "options": {"waitForSubWorkflow": false}
+      },
+      "id": "17cc1f48-e041-44cc-86b1-95a19f22cebb",
+      "name": "Start Clean Reindex",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [500, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn [{ json: { chat_id: $json.chat_id, reply: `🔄 Переіндексацію запущено для <code>${e($json.short_id)}</code>.\n${e($json.title)}\n\nСтарі фрагменти: ${Number($json.old_chunks_removed || 0)}. Новий RAG-індекс створюється у фоні.` } }];"
+      },
+      "id": "c07bf62b-15cb-4920-b388-92cf98c010da",
+      "name": "Prepare Reindex Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 380]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
+      },
+      "id": "b17ef3f7-d03f-4e04-a169-3f71155dafb8",
+      "name": "Send Reindex Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [760, 380],
+      "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {"main": [[{"node": "Execute Memory Command", "type": "main", "index": 0}]]},
+    "Execute Memory Command": {"main": [[{"node": "Normalize Command Result", "type": "main", "index": 0}]]},
+    "Normalize Command Result": {"main": [[
+      {"node": "Prepare Direct Reply", "type": "main", "index": 0},
+      {"node": "Pass Confirmed Delete", "type": "main", "index": 0},
+      {"node": "Pass Reindex Request", "type": "main", "index": 0}
+    ]]},
+    "Prepare Direct Reply": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
+    "Pass Confirmed Delete": {"main": [[{"node": "Prepare Safe Deletion", "type": "main", "index": 0}]]},
+    "Prepare Safe Deletion": {"main": [[{"node": "Delete Item Vectors", "type": "main", "index": 0}]]},
+    "Delete Item Vectors": {"main": [[{"node": "Expand B2 Deletions", "type": "main", "index": 0}]]},
+    "Expand B2 Deletions": {"main": [[
+      {"node": "Pass B2 Objects", "type": "main", "index": 0},
+      {"node": "Skip Shared or Missing B2 Objects", "type": "main", "index": 0}
+    ]]},
+    "Pass B2 Objects": {"main": [[{"node": "Delete Unshared Original from B2", "type": "main", "index": 0}]]},
+    "Delete Unshared Original from B2": {"main": [[{"node": "Collapse B2 Deletions", "type": "main", "index": 0}]]},
+    "Collapse B2 Deletions": {"main": [[{"node": "Finalize Database Deletion", "type": "main", "index": 0}]]},
+    "Skip Shared or Missing B2 Objects": {"main": [[{"node": "Finalize Database Deletion", "type": "main", "index": 0}]]},
+    "Finalize Database Deletion": {"main": [[{"node": "Prepare Delete Reply", "type": "main", "index": 0}]]},
+    "Prepare Delete Reply": {"main": [[{"node": "Send Delete Reply", "type": "main", "index": 0}]]},
+    "Pass Reindex Request": {"main": [[{"node": "Clear Vectors for Reindex", "type": "main", "index": 0}]]},
+    "Clear Vectors for Reindex": {"main": [[{"node": "Queue Clean Reindex", "type": "main", "index": 0}]]},
+    "Queue Clean Reindex": {"main": [[
+      {"node": "Start Clean Reindex", "type": "main", "index": 0},
+      {"node": "Prepare Reindex Reply", "type": "main", "index": 0}
+    ]]},
+    "Prepare Reindex Reply": {"main": [[{"node": "Send Reindex Reply", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "versionId": "84f3a945-b474-445e-ab03-a9f010a990ca",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}

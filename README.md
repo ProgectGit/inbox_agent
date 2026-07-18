@@ -45,6 +45,9 @@ AI nodes:
 - `Inbox — Backblaze B2 Original Upload`: an active S3-compatible original-file
   upload workflow started immediately for new attachments, with a five-minute
   recovery scan for missed or failed work.
+- `Inbox — Telegram Memory Management`: owner-only listing, inspection,
+  archiving, clean reindexing, and confirmed deletion across PostgreSQL,
+  Qdrant, and B2.
 
 ## Object storage
 
@@ -65,7 +68,7 @@ Stored attachments record both the object key and a complete `s3://` path.
 The watchdog sends a one-time Telegram alert only after all eight upload
 attempts have been exhausted.
 
-All six workflows are published on the production n8n instance. The older
+All seven workflows are published on the production n8n instance. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
 and must remain inactive because a Telegram bot should have only one production
 webhook entry point.
@@ -146,6 +149,25 @@ characters.
 
 Use `/save ...` or `/inbox ...` to force capture when a note begins with wording
 that resembles a search command.
+
+Manage stored knowledge directly from Telegram:
+
+```text
+/memory             show command help
+/recent             list the 10 latest records and their short IDs
+/show ID             show the structured analysis and attachments
+/archive ID          archive a record without deleting it
+/reindex ID          clear stale vectors and rebuild the RAG index
+/delete ID           request destructive deletion
+/confirm CODE        confirm deletion within 10 minutes
+/cancel CODE         cancel a pending deletion
+```
+
+`/delete` never acts immediately. A one-time confirmation is stored in
+`inbox.pending_actions` and expires after 10 minutes. Once confirmed, the
+workflow deletes the record and dependent rows from PostgreSQL, removes its
+Qdrant vectors by `inbox_item_id`, and deletes each B2 object only when no other
+attachment references the same bucket and object key.
 
 Search the Second Brain with `/search ...`, `/find ...`, or natural Ukrainian
 phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`. Restrict
