@@ -1,2 +1,4 @@
 .env
 .backup.env
+__pycache__/
+*.py[cod]

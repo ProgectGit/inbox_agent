@@ -56,8 +56,6 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_SAVE_ON_PROGRESS: "false"
       N8N_CONCURRENCY_PRODUCTION_LIMIT: ${N8N_CONCURRENCY_PRODUCTION_LIMIT:-2}
-      NODE_FUNCTION_ALLOW_EXTERNAL: mammoth
-      NODE_PATH: /usr/local/lib/node_modules/n8n/node_modules
     ports:
       - "127.0.0.1:5679:5678"
     volumes:
@@ -132,6 +130,23 @@ services:
     build:
       context: ./services/youtube-reader
     container_name: inbox-agent-youtube-reader
+    restart: unless-stopped
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    networks:
+      - inbox_agent_internal
+
+  document-reader:
+    build:
+      context: ./services/document-reader
+    container_name: inbox-agent-document-reader
     restart: unless-stopped
     expose:
       - "8080"

@@ -153,7 +153,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const analysis = $('Validate Classification').item.json;\nconst source = $('Load Inbox Item').item.json;\nif (!source.chat_id) return [];\nconst points = (analysis.key_points || []).slice(0, 8);\nconst actions = (analysis.next_actions || []).slice(0, 3);\nconst sections = [\n  `✅ Аналіз завершено\\n\\n🧠 ${analysis.title}`,\n  analysis.summary,\n  `📁 Проєкт: ${analysis.project}\\n🏷 Категорія: ${analysis.category}\\n📌 Тип: ${analysis.item_type}\\n⚡ Пріоритет: ${analysis.priority}\\n🌐 Мова джерела: ${analysis.language}`,\n  points.length ? `🔑 Ключові моменти:\\n${points.map((point) => `• ${point}`).join('\\n')}` : '',\n  actions.length ? `➡️ Наступні дії:\\n${actions.map((action) => `• ${action}`).join('\\n')}` : '',\n  $json.indexing_enqueued ? '🧩 RAG: додано до послідовної черги індексації.' : '🧩 RAG: матеріал уже стоїть у черзі або проіндексований.',\n  analysis.source_url ? `🔗 ${analysis.source_url}` : ''\n].filter(Boolean);\nreturn [{ json: { chat_id: source.chat_id, reply: sections.join('\\n\\n').slice(0, 4000) } }];"
+        "jsCode": "const analysis = $('Validate Classification').item.json;\nconst source = $('Load Inbox Item').item.json;\nif (!source.chat_id) return [];\nconst escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst points = (analysis.key_points || []).slice(0, 8);\nconst actions = (analysis.next_actions || []).slice(0, 3);\nconst sections = [\n  `✅ Аналіз завершено\\n\\n🧠 ${analysis.title}`,\n  analysis.summary,\n  `📁 Проєкт: ${analysis.project}\\n🏷 Категорія: ${analysis.category}\\n📌 Тип: ${analysis.item_type}\\n⚡ Пріоритет: ${analysis.priority}\\n🌐 Мова джерела: ${analysis.language}`,\n  points.length ? `🔑 Ключові моменти:\\n${points.map((point) => `• ${point}`).join('\\n')}` : '',\n  actions.length ? `➡️ Наступні дії:\\n${actions.map((action) => `• ${action}`).join('\\n')}` : '',\n  $json.indexing_enqueued ? '🧩 RAG: додано до послідовної черги індексації.' : '🧩 RAG: матеріал уже стоїть у черзі або проіндексований.',\n  analysis.source_url ? `🔗 ${analysis.source_url}` : ''\n].filter(Boolean);\nreturn [{ json: { chat_id: source.chat_id, reply: escapeHtml(sections.join('\\n\\n').slice(0, 4000)) } }];"
       },
       "id": "93d86079-6c4b-45bf-a2da-111930c8790d",
       "name": "Prepare Analysis Reply",
@@ -168,6 +168,7 @@
         "chatId": "={{ $json.chat_id }}",
         "text": "={{ $json.reply }}",
         "additionalFields": {
+          "parse_mode": "HTML",
           "appendAttribution": false
         }
       },

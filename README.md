@@ -9,6 +9,7 @@ Isolated n8n stack for the inbox agent.
 - PostgreSQL container: `inbox-agent-postgres`
 - Qdrant container: `inbox-agent-qdrant`
 - YouTube reader container: `inbox-agent-youtube-reader`
+- Office document reader container: `inbox-agent-document-reader`
 - Server directory: `/opt/inbox-agent-n8n`
 - Public n8n endpoint: `https://inbox.mihabot.top`
 - Server-local n8n endpoint: `http://127.0.0.1:5679`
@@ -124,23 +125,30 @@ downloading the video. When captions are unavailable, the title, channel,
 description, duration, and chapters still enter the classification and RAG
 pipeline.
 
-Plain-text files (`.txt`, `.md`, `.csv`, `.json`, `.xml`) and Word `.docx`
-documents are extracted locally inside n8n; `.docx` parsing uses the bundled
-`mammoth` package. This avoids sending unsupported Word MIME types to Gemini.
-The n8n container therefore enables `mammoth` for Code nodes through
-`NODE_FUNCTION_ALLOW_EXTERNAL` and sets `NODE_PATH` to n8n's installed modules.
+Plain-text files (`.txt`, `.md`, `.csv`, `.json`, `.xml`) are decoded locally
+inside n8n. Office files (`.docx`, `.xlsx`, `.pptx`) are routed to the private
+`document-reader` service. It extracts Word headings, paragraphs, tables,
+headers, footers, footnotes and document properties; Excel sheet names, cells
+and formulas; and PowerPoint slide text, tables and speaker notes. Image-only
+Office files fall back to Gemini for visual analysis. Extraction is capped at
+20 MB per file, 150 MB of uncompressed Office XML, and 120,000 stored
+characters.
 
 Use `/save ...` or `/inbox ...` to force capture when a note begins with wording
 that resembles a search command.
 
 Search the Second Brain with `/search ...`, `/find ...`, or natural Ukrainian
-phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`.
+phrases beginning with `Знайди`, `Покажи`, `Що я знаю`, or `Пошукай`. Restrict
+search to the content of uploaded files with `/doc ...`, `/docs ...`,
+`/docsearch ...`, or a phrase such as `Знайди в документах ...`.
 
 Examples:
 
 ```text
 /save Ідея: додати щотижневий огляд знань
 /search Docker Compose
+/docs резервне копіювання PostgreSQL
+Знайди в документах згадки про Shopify
 Що я знаю про MCP?
 Покажи всі матеріали про AI Studio
 ```
