@@ -43,7 +43,8 @@ AI nodes:
 - `Inbox — Recovery and Monitoring`: a one-minute watchdog that recovers stale
   work, retries analysis/indexing, stops exhausted jobs, and sends alerts.
 - `Inbox — Backblaze B2 Original Upload`: an active S3-compatible original-file
-  upload workflow that processes pending attachments every minute.
+  upload workflow started immediately for new attachments, with a five-minute
+  recovery scan for missed or failed work.
 
 ## Object storage
 
@@ -56,7 +57,13 @@ before the 10 GB free-tier limit.
 Production uses the private encrypted bucket `inbox-agent-progectxo` through the
 n8n S3 credential `Backblaze B2 Inbox Storage`. The workflow stores originals
 under user/year/month/attachment paths and records each resulting object key in
-PostgreSQL.
+PostgreSQL. Every downloaded binary receives a SHA-256 checksum. Repeated files
+reuse the first stored B2 object and record `duplicate_of_attachment_id` rather
+than uploading another copy. Failed transfers retry up to eight times with
+exponential backoff; stale `uploading` rows are recovered after 15 minutes.
+Stored attachments record both the object key and a complete `s3://` path.
+The watchdog sends a one-time Telegram alert only after all eight upload
+attempts have been exhausted.
 
 All six workflows are published on the production n8n instance. The older
 `Inbox Agent — Telegram + Gemini + RAG` workflow is kept as a reference draft
@@ -66,10 +73,13 @@ webhook entry point.
 ## Disk guardrails
 
 Docker rotates every container log at 10 MB and retains three files. n8n prunes
-execution history after seven days or 2,000 executions, keeps failed execution
-data for diagnosis, and does not store successful runs of the two one-minute
-maintenance workflows. These limits affect operational history only; they do
-not delete PostgreSQL knowledge, Qdrant vectors, or Backblaze originals.
+execution history after seven days or 2,000 executions and keeps failed
+execution data for diagnosis. Successful maintenance records are retained only
+inside those global limits so n8n closes their execution state correctly. B2
+upload binaries are execution-scoped and are removed by the same n8n pruning
+mechanism; no separate persistent local original-file directory is used. These
+limits affect operational history only; they do not delete PostgreSQL
+knowledge, Qdrant vectors, or Backblaze originals.
 
 The `disk-monitor` container checks the host filesystem every five minutes and
 writes a warning to its rotated Docker log when usage crosses 80%. It sends no

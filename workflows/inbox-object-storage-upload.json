@@ -11,7 +11,7 @@
       "position": [-620, 0]
     },
     {
-      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 1}]}},
+      "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 5}]}},
       "id": "0f7af36f-320b-4964-8552-34ddfe2f4db1",
       "name": "Every Minute",
       "type": "n8n-nodes-base.scheduleTrigger",
@@ -21,7 +21,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH candidate AS (\n  SELECT attachments.id\n  FROM inbox.attachments\n  WHERE attachments.telegram_file_id IS NOT NULL\n    AND attachments.upload_status IN ('metadata_only', 'pending', 'failed')\n    AND (NULLIF($1::text, '') IS NULL OR attachments.id = NULLIF($1::text, '')::uuid)\n  ORDER BY attachments.created_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED\n),\nclaimed AS (\n  UPDATE inbox.attachments AS attachments\n  SET upload_status = 'uploading',\n      storage_provider = 'backblaze_b2',\n      storage_bucket = $2::text,\n      storage_error = NULL\n  FROM candidate\n  WHERE attachments.id = candidate.id\n  RETURNING attachments.*\n)\nSELECT\n  claimed.id::text AS attachment_id,\n  claimed.inbox_item_id::text AS inbox_item_id,\n  items.user_id::text AS user_id,\n  claimed.telegram_file_id,\n  claimed.original_name,\n  claimed.mime_type,\n  claimed.size_bytes,\n  claimed.storage_bucket,\n  concat(\n    'users/', items.user_id::text, '/',\n    to_char(claimed.created_at, 'YYYY/MM'), '/',\n    claimed.id::text, '/',\n    regexp_replace(COALESCE(claimed.original_name, claimed.id::text), '[^a-zA-Z0-9._-]+', '_', 'g')\n  ) AS object_key\nFROM claimed\nJOIN inbox.inbox_items AS items ON items.id = claimed.inbox_item_id;",
+        "query": "WITH recovered AS (\n  UPDATE inbox.attachments\n  SET upload_status = 'failed',\n      upload_started_at = NULL,\n      next_upload_at = now() + interval '5 minutes',\n      storage_error = 'stale_upload_recovered'\n  WHERE upload_status = 'uploading'\n    AND upload_started_at < now() - interval '15 minutes'\n  RETURNING id\n),\ncandidate AS (\n  SELECT attachments.id\n  FROM inbox.attachments\n  WHERE attachments.telegram_file_id IS NOT NULL\n    AND attachments.upload_attempts < 8\n    AND COALESCE(attachments.next_upload_at, '-infinity'::timestamptz) <= now()\n    AND (\n      attachments.upload_status IN ('metadata_only', 'pending', 'failed')\n      OR (attachments.upload_status = 'stored' AND attachments.checksum_sha256 IS NULL)\n    )\n    AND (NULLIF($1::text, '') IS NULL OR attachments.id = NULLIF($1::text, '')::uuid)\n  ORDER BY\n    CASE WHEN attachments.upload_status = 'stored' THEN 1 ELSE 0 END,\n    attachments.created_at\n  LIMIT 1\n  FOR UPDATE SKIP LOCKED\n),\nclaimed AS (\n  UPDATE inbox.attachments AS attachments\n  SET upload_status = 'uploading',\n      storage_provider = 'backblaze_b2',\n      storage_bucket = COALESCE(attachments.storage_bucket, $2::text),\n      storage_error = NULL,\n      upload_attempts = attachments.upload_attempts + 1,\n      upload_started_at = now(),\n      next_upload_at = NULL\n  FROM candidate\n  WHERE attachments.id = candidate.id\n  RETURNING attachments.*\n)\nSELECT\n  claimed.id::text AS attachment_id,\n  claimed.inbox_item_id::text AS inbox_item_id,\n  items.user_id::text AS user_id,\n  claimed.telegram_file_id,\n  claimed.original_name,\n  claimed.mime_type,\n  claimed.size_bytes,\n  claimed.storage_bucket,\n  claimed.upload_attempts,\n  COALESCE(\n    claimed.object_key,\n    concat(\n      'users/', items.user_id::text, '/',\n      to_char(claimed.created_at, 'YYYY/MM'), '/',\n      claimed.id::text, '/',\n      regexp_replace(COALESCE(claimed.original_name, claimed.id::text), '[^a-zA-Z0-9._-]+', '_', 'g')\n    )\n  ) AS object_key\nFROM claimed\nJOIN inbox.inbox_items AS items ON items.id = claimed.inbox_item_id\nCROSS JOIN (SELECT count(*) FROM recovered) AS recovery_done;",
         "options": {
           "queryReplacement": "={{ [ $json.attachment_id || '', $json.storage_bucket || 'inbox-agent-progectxo' ] }}",
           "queryBatching": "independently"
@@ -31,6 +31,7 @@
       "name": "Claim Pending Attachment",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
+      "alwaysOutputData": true,
       "position": [-370, 0],
       "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
     },
@@ -46,6 +47,16 @@
     },
     {
       "parameters": {
+        "jsCode": "if ($json.attachment_id) return [];\nreturn [{ json: { queue_status: 'idle', checked_at: new Date().toISOString() } }];"
+      },
+      "id": "64862273-bb41-468f-813f-2ef9360093d6",
+      "name": "Complete Idle Queue Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-230, 180]
+    },
+    {
+      "parameters": {
         "resource": "file",
         "operation": "get",
         "fileId": "={{ $json.telegram_file_id }}",
@@ -57,7 +68,77 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [-110, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput",
       "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
+    },
+    {
+      "parameters": {
+        "action": "hash",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "type": "SHA256",
+        "dataPropertyName": "checksum_sha256",
+        "encoding": "hex"
+      },
+      "id": "2b299f17-9b6d-46cd-b4bf-342b8a9910b9",
+      "name": "Calculate SHA-256",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [70, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH current_attachment AS (\n  UPDATE inbox.attachments\n  SET checksum_sha256 = $2::text\n  WHERE id = $1::uuid\n  RETURNING id, checksum_sha256\n),\nduplicate AS (\n  SELECT\n    attachments.id,\n    attachments.storage_provider,\n    attachments.storage_bucket,\n    attachments.object_key,\n    attachments.storage_path,\n    attachments.etag,\n    attachments.storage_class,\n    attachments.uploaded_at,\n    attachments.encryption\n  FROM inbox.attachments AS attachments\n  JOIN current_attachment ON attachments.checksum_sha256 = current_attachment.checksum_sha256\n  WHERE attachments.id <> current_attachment.id\n    AND attachments.upload_status = 'stored'\n    AND attachments.object_key IS NOT NULL\n  ORDER BY attachments.uploaded_at NULLS LAST, attachments.created_at\n  LIMIT 1\n)\nSELECT\n  current_attachment.id::text AS attachment_id,\n  current_attachment.checksum_sha256,\n  EXISTS (SELECT 1 FROM duplicate) AS is_duplicate,\n  COALESCE((SELECT id::text FROM duplicate), '') AS duplicate_attachment_id,\n  COALESCE((SELECT storage_provider FROM duplicate), '') AS duplicate_storage_provider,\n  COALESCE((SELECT storage_bucket FROM duplicate), '') AS duplicate_storage_bucket,\n  COALESCE((SELECT object_key FROM duplicate), '') AS duplicate_object_key,\n  COALESCE((SELECT storage_path FROM duplicate), '') AS duplicate_storage_path,\n  COALESCE((SELECT etag FROM duplicate), '') AS duplicate_etag,\n  COALESCE((SELECT storage_class FROM duplicate), '') AS duplicate_storage_class,\n  (SELECT uploaded_at FROM duplicate) AS duplicate_uploaded_at,\n  COALESCE((SELECT encryption FROM duplicate), '') AS duplicate_encryption\nFROM current_attachment;",
+        "options": {
+          "queryReplacement": "={{ [ $('Claim Pending Attachment').item.json.attachment_id, $json.checksum_sha256 ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "94c2681f-04d4-44c7-851f-7180df0f5af7",
+      "name": "Resolve Stored Duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [290, 0],
+      "onError": "continueErrorOutput",
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "return $json.is_duplicate ? [] : [{ json: $json }];"
+      },
+      "id": "113e6f44-b3f8-41ea-9f5a-0e820035b874",
+      "name": "Pass New Object",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [510, -60]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $json.is_duplicate ? [{ json: $json }] : [];"
+      },
+      "id": "5ee29b5a-16b4-4c09-9ff8-f37dbbf207ca",
+      "name": "Pass Stored Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [510, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const downloaded = $('Download Original from Telegram').first();\nreturn [{ json: $json, binary: downloaded.binary }];"
+      },
+      "id": "d406eb64-1195-4dfd-8b5a-477c338fe735",
+      "name": "Restore Binary for Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [710, -60]
     },
     {
       "parameters": {
@@ -73,15 +154,19 @@
       "name": "Upload Original to B2",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [150, 0],
+      "position": [930, -60],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
       "credentials": {"s3": {"id": "20YWHyHI8TuFogpn", "name": "Backblaze B2 Inbox Storage"}}
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE inbox.attachments\nSET upload_status = 'stored',\n    storage_provider = 'backblaze_b2',\n    storage_bucket = $2::text,\n    object_key = $3::text,\n    storage_class = 'STANDARD',\n    uploaded_at = now(),\n    encryption = 'provider-managed',\n    storage_error = NULL\nWHERE id = $1::uuid\nRETURNING id::text AS attachment_id, storage_provider, storage_bucket, object_key, upload_status, uploaded_at;",
+        "query": "UPDATE inbox.attachments\nSET upload_status = 'stored',\n    storage_provider = 'backblaze_b2',\n    storage_bucket = $2::text,\n    object_key = $3::text,\n    storage_path = concat('s3://', $2::text, '/', $3::text),\n    checksum_sha256 = $4::text,\n    etag = nullif(trim(both '\"' from $5::text), ''),\n    storage_class = 'STANDARD',\n    uploaded_at = now(),\n    upload_started_at = NULL,\n    next_upload_at = NULL,\n    duplicate_of_attachment_id = NULL,\n    encryption = 'provider-managed',\n    storage_error = NULL\nWHERE id = $1::uuid\nRETURNING id::text AS attachment_id, storage_provider, storage_bucket, object_key, storage_path, checksum_sha256, etag, upload_status, uploaded_at;",
         "options": {
-          "queryReplacement": "={{ [ $('Claim Pending Attachment').item.json.attachment_id, $('Claim Pending Attachment').item.json.storage_bucket, $('Claim Pending Attachment').item.json.object_key ] }}",
+          "queryReplacement": "={{ [ $('Claim Pending Attachment').item.json.attachment_id, $('Claim Pending Attachment').item.json.storage_bucket, $('Claim Pending Attachment').item.json.object_key, $('Resolve Stored Duplicate').item.json.checksum_sha256, $json.ETag || $json.eTag || $json.etag || '' ] }}",
           "queryBatching": "independently"
         }
       },
@@ -89,17 +174,91 @@
       "name": "Mark Original Stored",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [410, 0],
+      "position": [1150, -60],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbox.attachments\nSET upload_status = 'stored',\n    storage_provider = nullif($3::text, ''),\n    storage_bucket = nullif($4::text, ''),\n    object_key = nullif($5::text, ''),\n    storage_path = COALESCE(nullif($6::text, ''), concat('s3://', $4::text, '/', $5::text)),\n    checksum_sha256 = $2::text,\n    etag = nullif($7::text, ''),\n    storage_class = COALESCE(nullif($8::text, ''), 'STANDARD'),\n    uploaded_at = COALESCE($9::timestamptz, now()),\n    upload_started_at = NULL,\n    next_upload_at = NULL,\n    duplicate_of_attachment_id = $10::uuid,\n    encryption = COALESCE(nullif($11::text, ''), 'provider-managed'),\n    storage_error = NULL\nWHERE id = $1::uuid\nRETURNING id::text AS attachment_id, duplicate_of_attachment_id::text AS duplicate_of_attachment_id, storage_path, checksum_sha256, upload_status;",
+        "options": {
+          "queryReplacement": "={{ [ $json.attachment_id, $json.checksum_sha256, $json.duplicate_storage_provider, $json.duplicate_storage_bucket, $json.duplicate_object_key, $json.duplicate_storage_path, $json.duplicate_etag, $json.duplicate_storage_class, $json.duplicate_uploaded_at, $json.duplicate_attachment_id, $json.duplicate_encryption ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "9c602f88-e338-4be8-a067-cbd0d71ace15",
+      "name": "Mark Duplicate Stored",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [710, 100],
+      "onError": "continueErrorOutput",
+      "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbox.attachments\nSET upload_status = 'failed',\n    upload_started_at = NULL,\n    next_upload_at = CASE\n      WHEN upload_attempts >= 8 THEN NULL\n      ELSE now() + make_interval(mins => LEAST(60, power(2, GREATEST(upload_attempts - 1, 0))::integer))\n    END,\n    storage_error = left($2::text, 1000)\nWHERE id = $1::uuid\nRETURNING id::text AS attachment_id, upload_status, upload_attempts, next_upload_at, storage_error;",
+        "options": {
+          "queryReplacement": "={{ [ $('Claim Pending Attachment').first().json.attachment_id, String($json.error?.message || $json.message || $json.description || 'object_storage_upload_failed').slice(0, 1000) ] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "852f3244-3bde-4498-9b07-1d1bd0ae4192",
+      "name": "Mark Upload Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [930, 180],
       "credentials": {"postgres": {"id": "384ec057-10f8-41b5-9d1b-f587c652e358", "name": "Inbox Agent PostgreSQL"}}
     }
   ],
   "connections": {
     "When Executed by Another Workflow": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
     "Every Minute": {"main": [[{"node": "Claim Pending Attachment", "type": "main", "index": 0}]]},
-    "Claim Pending Attachment": {"main": [[{"node": "Pass Claimed Attachment", "type": "main", "index": 0}]]},
+    "Claim Pending Attachment": {"main": [[
+      {"node": "Pass Claimed Attachment", "type": "main", "index": 0},
+      {"node": "Complete Idle Queue Check", "type": "main", "index": 0}
+    ]]},
     "Pass Claimed Attachment": {"main": [[{"node": "Download Original from Telegram", "type": "main", "index": 0}]]},
-    "Download Original from Telegram": {"main": [[{"node": "Upload Original to B2", "type": "main", "index": 0}]]},
-    "Upload Original to B2": {"main": [[{"node": "Mark Original Stored", "type": "main", "index": 0}]]}
+    "Download Original from Telegram": {"main": [
+      [{"node": "Calculate SHA-256", "type": "main", "index": 0}],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]},
+    "Calculate SHA-256": {"main": [
+      [{"node": "Resolve Stored Duplicate", "type": "main", "index": 0}],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]},
+    "Resolve Stored Duplicate": {"main": [
+      [
+        {"node": "Pass New Object", "type": "main", "index": 0},
+        {"node": "Pass Stored Duplicate", "type": "main", "index": 0}
+      ],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]},
+    "Pass New Object": {"main": [[{"node": "Restore Binary for Upload", "type": "main", "index": 0}]]},
+    "Restore Binary for Upload": {"main": [[{"node": "Upload Original to B2", "type": "main", "index": 0}]]},
+    "Upload Original to B2": {"main": [
+      [{"node": "Mark Original Stored", "type": "main", "index": 0}],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]},
+    "Pass Stored Duplicate": {"main": [[{"node": "Mark Duplicate Stored", "type": "main", "index": 0}]]},
+    "Mark Original Stored": {"main": [
+      [],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]},
+    "Mark Duplicate Stored": {"main": [
+      [],
+      [{"node": "Mark Upload Failed", "type": "main", "index": 0}]
+    ]}
   },
   "active": true,
   "settings": {
@@ -107,7 +266,7 @@
     "saveExecutionProgress": false,
     "saveManualExecutions": true,
     "saveDataErrorExecution": "all",
-    "saveDataSuccessExecution": "none"
+    "saveDataSuccessExecution": "all"
   },
   "versionId": "239ba4d1-cf31-443d-9d7b-521907a799f9",
   "meta": {"templateCredsSetupCompleted": false},

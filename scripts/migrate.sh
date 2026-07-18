@@ -45,4 +45,14 @@ docker compose exec -T postgres sh -lc \
     -v locale="$OWNER_LOCALE"' \
   < database/migrations/003_seed_owner.sql
 
+for migration in database/migrations/[0-9][0-9][0-9]_*.sql; do
+  [[ -e "$migration" ]] || continue
+  case "${migration##*/}" in
+    001_*|002_*|003_*) continue ;;
+  esac
+  docker compose exec -T postgres sh -lc \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' \
+    < "$migration"
+done
+
 echo "Inbox Agent database migrations applied successfully."
