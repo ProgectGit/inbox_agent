@@ -50,7 +50,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const text = String($json.normalized_text || '').trim();\nconst match = text.match(/^\\/(memory|recent|show|review|edit|archive|unarchive|related|duplicates|graph|file|download|merge|delete|confirm|cancel|reindex)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/i);\nif (!match || $json.media_kind) return [{ json: $json }];\nreturn [{ json: { ...$json, intent: 'manage', management_command: String(match[1] || '').toLowerCase(), management_argument: String(match[2] || '').trim() } }];"
+        "jsCode": "const text = String($json.normalized_text || '').trim();\nif ($json.media_kind) return [{ json: $json }];\nconst naturalHelp = /^(команди|команда|допомога|help)$/iu.test(text);\nconst match = text.match(/^\\/(memory|commands|help|recent|show|review|edit|archive|unarchive|related|duplicates|graph|file|download|merge|delete|confirm|cancel|reindex)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/i);\nif (!naturalHelp && !match) return [{ json: $json }];\nconst command = naturalHelp || ['commands', 'help'].includes(String(match?.[1] || '').toLowerCase()) ? 'memory' : String(match?.[1] || '').toLowerCase();\nreturn [{ json: { ...$json, intent: 'manage', management_command: command, management_argument: naturalHelp ? '' : String(match?.[2] || '').trim() } }];"
       },
       "id": "bb892fc7-70bc-49ab-9259-4ccbbb7267f0",
       "name": "Detect Memory Command",

@@ -160,6 +160,10 @@ that resembles a search command.
 
 Manage stored knowledge directly from Telegram:
 
+Type `команди`, `/memory`, `/commands`, or `/help` to receive the full Ukrainian
+help message. The bot also registers its commands with Telegram, so typing `/`
+opens the native command picker with a short explanation for every command.
+
 ```text
 /memory             show command help
 /recent             list the 10 latest records and their short IDs

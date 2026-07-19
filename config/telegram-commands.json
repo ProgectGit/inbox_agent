@@ -1,0 +1,22 @@
+{
+  "commands": [
+    {"command": "memory", "description": "Усі команди та докладна довідка"},
+    {"command": "save", "description": "Зберегти нотатку: /save текст"},
+    {"command": "search", "description": "Пошук у Другому Мозку"},
+    {"command": "docs", "description": "Пошук лише в документах"},
+    {"command": "recent", "description": "Останні 10 записів та їхні ID"},
+    {"command": "review", "description": "Записи, які варто перевірити"},
+    {"command": "show", "description": "Деталі запису: /show ID"},
+    {"command": "edit", "description": "Виправити аналіз: /edit ID поле=значення"},
+    {"command": "related", "description": "Пов’язані матеріали: /related ID"},
+    {"command": "graph", "description": "Граф зв’язків: /graph ID"},
+    {"command": "duplicates", "description": "Показати можливі дублікати"},
+    {"command": "file", "description": "Отримати оригінал: /file ID"},
+    {"command": "archive", "description": "Архівувати запис: /archive ID"},
+    {"command": "unarchive", "description": "Відновити запис: /unarchive ID"},
+    {"command": "reindex", "description": "Перебудувати RAG: /reindex ID"},
+    {"command": "merge", "description": "Об’єднати: /merge ДУБЛЬ ГОЛОВНИЙ"},
+    {"command": "delete", "description": "Безпечне видалення: /delete ID"},
+    {"command": "cancel", "description": "Скасувати очікувану дію"}
+  ]
+}
