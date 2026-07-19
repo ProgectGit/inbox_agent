@@ -163,6 +163,12 @@ Manage stored knowledge directly from Telegram:
 Type `команди`, `/memory`, `/commands`, or `/help` to receive the full Ukrainian
 help message. The bot also registers its commands with Telegram, so typing `/`
 opens the native command picker with a short explanation for every command.
+Help, recent records, review results, duplicate candidates, and record details
+also include inline buttons. Button presses are handled as Telegram callback
+queries, acknowledged immediately, and routed through the same owner-only
+PostgreSQL command functions as their text-command equivalents. Destructive
+actions still require an explicit Confirm button backed by the expiring
+`inbox.pending_actions` token.
 
 ```text
 /memory             show command help

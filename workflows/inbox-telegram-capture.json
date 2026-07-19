@@ -5,7 +5,8 @@
     {
       "parameters": {
         "updates": [
-          "message"
+          "message",
+          "callback_query"
         ],
         "additionalFields": {}
       },
@@ -24,6 +25,16 @@
           "name": "Telegram account"
         }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\nconst callback = input.callback_query || null;\nif (!callback) return [{ json: input }];\nconst data = String(callback.data || '');\nconst parts = data.split(':');\nconst allowed = new Set(['memory', 'recent', 'review', 'show', 'related', 'graph', 'duplicates', 'file', 'archive', 'unarchive', 'reindex', 'merge', 'delete', 'confirm', 'cancel']);\nconst command = parts[0] === 'ia' && allowed.has(parts[1]) ? parts[1] : 'memory';\nconst argument = parts.slice(2).join(' ').trim();\nconst message = callback.message || {};\nreturn [{ json: {\n  ...input,\n  _callback_query_id: String(callback.id || ''),\n  message: { ...message, from: callback.from || message.from || {}, text: `/${command}${argument ? ` ${argument}` : ''}` }\n} }];"
+      },
+      "id": "7eb33da4-20d5-4b43-a62e-b1d9f9d50cef",
+      "name": "Normalize Callback Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-600, 0]
     },
     {
       "parameters": {
@@ -67,6 +78,35 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [-150, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const queryId = String($json.raw_payload?._callback_query_id || '');\nreturn queryId ? [{ json: { callback_query_id: queryId } }] : [];"
+      },
+      "id": "483a1fe2-569d-44de-8c49-61d4e2d72e4b",
+      "name": "Pass Callback Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-150, 220]
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "operation": "answerQuery",
+        "queryId": "={{ $json.callback_query_id }}",
+        "additionalFields": {}
+      },
+      "id": "b04d2663-9314-4ac3-970d-6dbbe65e45d1",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [100, 220],
+      "credentials": {
+        "telegramApi": {
+          "id": "iIA8c9213PIlR1Zm",
+          "name": "Telegram account"
+        }
+      }
     },
     {
       "parameters": {
@@ -750,6 +790,13 @@
   "connections": {
     "Telegram Trigger": {
       "main": [[{
+        "node": "Normalize Callback Query",
+        "type": "main",
+        "index": 0
+      }]]
+    },
+    "Normalize Callback Query": {
+      "main": [[{
         "node": "Normalize Telegram Input",
         "type": "main",
         "index": 0
@@ -765,11 +812,15 @@
         {"node": "Pass Search Requests", "type": "main", "index": 0},
         {"node": "Pass Media Requests", "type": "main", "index": 0},
         {"node": "Pass Unsupported Media", "type": "main", "index": 0},
-        {"node": "Pass Memory Commands", "type": "main", "index": 0}
+        {"node": "Pass Memory Commands", "type": "main", "index": 0},
+        {"node": "Pass Callback Query", "type": "main", "index": 0}
       ]]
     },
     "Pass Memory Commands": {
       "main": [[{"node": "Start Memory Management", "type": "main", "index": 0}]]
+    },
+    "Pass Callback Query": {
+      "main": [[{"node": "Answer Callback Query", "type": "main", "index": 0}]]
     },
     "Pass Unsupported Media": {
       "main": [[{"node": "Authorize and Save Inbox Item", "type": "main", "index": 0}]]

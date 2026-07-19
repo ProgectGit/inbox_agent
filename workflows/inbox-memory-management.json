@@ -58,17 +58,29 @@
     },
     {
       "parameters": {
+        "jsCode": "const reply = String($json.reply || '');\nconst button = (text, data) => ({ text, additionalFields: { callback_data: data } });\nconst row = (...buttons) => ({ row: { buttons } });\nconst rows = [];\nconst uniqueIds = [...new Set([...reply.matchAll(/<code>([0-9a-f]{6,36})<\\/code>/gi)].map((match) => match[1]))];\nconst addMenu = () => rows.push(row(button('☰ Команди', 'ia:memory')));\n\nif (reply.includes('<b>Керування пам’яттю</b>')) {\n  rows.push(row(button('🕘 Останні', 'ia:recent'), button('🔎 Перевірка', 'ia:review')));\n  rows.push(row(button('🧩 Дублікати', 'ia:duplicates')));\n} else if (reply.includes('<b>Останні записи</b>') || reply.includes('<b>Черга перевірки</b>') || reply.includes('<b>Пов’язані з ') || reply.includes('<b>Граф для ')) {\n  for (const id of uniqueIds.slice(0, 10)) rows.push(row(button(`👁 ${id}`, `ia:show:${id}`)));\n  addMenu();\n} else if (reply.includes('<b>Знайдені дублікати</b>')) {\n  const merges = [...reply.matchAll(/<code>\\/merge\\s+([0-9a-f]{6,36})\\s+([0-9a-f]{6,36})<\\/code>/gi)];\n  for (const match of merges.slice(0, 8)) rows.push(row(button(`🔀 ${match[1]} → ${match[2]}`, `ia:merge:${match[1]}:${match[2]}`)));\n  addMenu();\n} else if (reply.includes('<b>Підтвердження видалення</b>') || reply.includes('<b>Підтвердження злиття</b>')) {\n  const confirm = reply.match(/<code>\\/confirm\\s+([^<\\s]+)<\\/code>/i)?.[1];\n  const cancel = reply.match(/<code>\\/cancel\\s+([^<\\s]+)<\\/code>/i)?.[1] || confirm;\n  if (confirm) rows.push(row(button('✅ Підтвердити', `ia:confirm:${confirm}`), button('❌ Скасувати', `ia:cancel:${cancel}`)));\n  else addMenu();\n} else {\n  const detail = reply.match(/^<b>[\\s\\S]*?<\\/b>\\n<code>([0-9a-f]{6,36})<\\/code>/i);\n  if (detail) {\n    const id = detail[1];\n    rows.push(row(button('🔗 Пов’язані', `ia:related:${id}`), button('🕸 Граф', `ia:graph:${id}`)));\n    rows.push(row(button('📄 Файл', `ia:file:${id}`), button(reply.includes('📦 архів') ? '📤 Відновити' : '📦 Архів', `ia:${reply.includes('📦 архів') ? 'unarchive' : 'archive'}:${id}`)));\n    rows.push(row(button('♻️ RAG', `ia:reindex:${id}`), button('🗑 Видалити', `ia:delete:${id}`)));\n    addMenu();\n  } else if (reply.includes('Вкажіть щонайменше 6 символів ID')) {\n    rows.push(row(button('🕘 Обрати з останніх', 'ia:recent')));\n    addMenu();\n  } else {\n    addMenu();\n  }\n}\n\nreturn [{ json: { ...$json, inline_keyboard: { rows } } }];"
+      },
+      "id": "d1a037aa-abeb-4f94-8552-9fffb433cad0",
+      "name": "Add Interactive Keyboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, -340]
+    },
+    {
+      "parameters": {
         "resource": "message",
         "operation": "sendMessage",
         "chatId": "={{ $json.chat_id }}",
         "text": "={{ $json.reply }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": "={{ $json.inline_keyboard }}",
         "additionalFields": {"parse_mode": "HTML", "appendAttribution": false}
       },
       "id": "2b916412-2cd7-4a1e-b499-70c89930eb7e",
       "name": "Send Management Reply",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [10, -260],
+      "position": [240, -340],
       "credentials": {"telegramApi": {"id": "iIA8c9213PIlR1Zm", "name": "Telegram account"}}
     },
     {
@@ -481,8 +493,9 @@
       {"node": "Pass File Download", "type": "main", "index": 0},
       {"node": "Pass Reindex Request", "type": "main", "index": 0}
     ]]},
-    "Prepare Curation Reply": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
-    "Prepare Direct Reply": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
+    "Prepare Curation Reply": {"main": [[{"node": "Add Interactive Keyboard", "type": "main", "index": 0}]]},
+    "Prepare Direct Reply": {"main": [[{"node": "Add Interactive Keyboard", "type": "main", "index": 0}]]},
+    "Add Interactive Keyboard": {"main": [[{"node": "Send Management Reply", "type": "main", "index": 0}]]},
     "Pass Confirmed Delete": {"main": [[{"node": "Prepare Safe Deletion", "type": "main", "index": 0}]]},
     "Prepare Safe Deletion": {"main": [[{"node": "Delete Item Vectors", "type": "main", "index": 0}]]},
     "Delete Item Vectors": {"main": [[{"node": "Expand B2 Deletions", "type": "main", "index": 0}]]},
